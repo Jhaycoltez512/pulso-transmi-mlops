@@ -5,9 +5,9 @@ ejemplos reproducibles y una plantilla de GitHub Actions para construir un
 pipeline que descargue datos, entrene, monitoree y posteriormente envíe
 predicciones.
 
-> **Preview privado:** la API candidata aún no está abierta a Internet. La URL
-> prevista es `https://pulso-transmi.72-60-245-2.sslip.io` y se habilitará cuando
-> el profesor confirme la publicación.
+> **Disponible públicamente:** la API de lectura está en
+> `https://pulso-transmi.72-60-245-2.sslip.io` y su documentación interactiva en
+> [`/docs`](https://pulso-transmi.72-60-245-2.sslip.io/docs).
 
 ## El reto
 
@@ -82,7 +82,7 @@ futuro y pasado y genera métricas engañosas.
 | `GET` | `/v1/context` | Clima y eventos |
 | `GET` | `/v1/downloads/{filename}` | Descarga completa |
 
-Swagger estará disponible en `/docs`. Consulta [docs/api.md](docs/api.md) para
+Swagger está disponible en `/docs`. Consulta [docs/api.md](docs/api.md) para
 filtros, paginación y errores.
 
 ## Estructura esperada del proyecto estudiantil

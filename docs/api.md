@@ -1,6 +1,6 @@
 # API de lectura
 
-La URL base candidata es:
+La URL base pública es:
 
 ```text
 https://pulso-transmi.72-60-245-2.sslip.io
