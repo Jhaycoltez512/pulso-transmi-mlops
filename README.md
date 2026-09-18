@@ -37,6 +37,20 @@ python examples/02_naive_baseline.py
 
 En Windows PowerShell, la activación es `.venv\Scripts\Activate.ps1`.
 
+## Implementación del equipo
+
+La rama [`develop/ml`](https://github.com/Jhaycoltez512/pulso-transmi-mlops/tree/develop/ml)
+contiene el trabajo de experimentación. Incluye:
+
+- esquema y carga inicial en Supabase;
+- EDA reproducible en `analysis/eda.py` y resultados en `eda_results/`;
+- baseline de `HistGradientBoostingRegressor` con retardos diario y semanal;
+- baseline naive semanal (demanda de la misma estación siete días antes);
+- generación y validación local de una vista previa de submission, sin enviarla.
+
+Consulta [la guía de Supabase](docs/supabase.md) y [la guía de baselines](docs/ml-baselines.md)
+para los comandos, el particionado temporal y las métricas.
+
 ## Uso del SDK
 
 ```python
