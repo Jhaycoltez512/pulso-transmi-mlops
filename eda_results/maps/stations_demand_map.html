@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_43f7fe47cf5affe1b064f68e50d7eaec {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_43f7fe47cf5affe1b064f68e50d7eaec" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_43f7fe47cf5affe1b064f68e50d7eaec = L.map(
+                "map_43f7fe47cf5affe1b064f68e50d7eaec",
+                {
+                    center: [4.640144573333334, -74.09681079333332],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 11,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_75ba92d9d50dd537d65fc13c32342e6c = L.tileLayer(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 19,
+  "maxNativeZoom": 19,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors",
+  "subdomains": "abc",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_75ba92d9d50dd537d65fc13c32342e6c.addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+            var circle_marker_6531f8e9afd7efb5e78a633ce0c046c1 = L.circleMarker(
+                [4.74681506, -74.09427889],
+                {"bubblingMouseEvents": true, "color": "#4575b4", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#4575b4", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 21.535493827160494, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_83049c4af4540ddd98abee66e876a0c3 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_3bc47d5f2cd9f1f577ce355b6b091192 = $(`<div id="html_3bc47d5f2cd9f1f577ce355b6b091192" style="width: 100.0%; height: 100.0%;"><b>Portal Suba</b><br>ID: 03000<br>Corredor: Suba<br>Demanda media: 258.4<br>Demanda máxima: 1252<br>Períodos faltantes: 0</div>`)[0];
+                popup_83049c4af4540ddd98abee66e876a0c3.setContent(html_3bc47d5f2cd9f1f577ce355b6b091192);
+            
+        
+
+        circle_marker_6531f8e9afd7efb5e78a633ce0c046c1.bindPopup(popup_83049c4af4540ddd98abee66e876a0c3)
+        ;
+
+        
+    
+    
+            circle_marker_6531f8e9afd7efb5e78a633ce0c046c1.bindTooltip(
+                `<div>
+                     Portal Suba
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_3ce6d6b310d46eebdd5b9d4e6cbbb1e6 = L.circleMarker(
+                [4.6293813, -74.17305845],
+                {"bubblingMouseEvents": true, "color": "#d73027", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#d73027", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 28.5048225308642, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_1f95454b802d49cd07e1c3e084bd7ede = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_dbdd0aa992804879f8296da384678a2e = $(`<div id="html_dbdd0aa992804879f8296da384678a2e" style="width: 100.0%; height: 100.0%;"><b>Portal Américas</b><br>ID: 05000<br>Corredor: Américas<br>Demanda media: 342.1<br>Demanda máxima: 1944<br>Períodos faltantes: 0</div>`)[0];
+                popup_1f95454b802d49cd07e1c3e084bd7ede.setContent(html_dbdd0aa992804879f8296da384678a2e);
+            
+        
+
+        circle_marker_3ce6d6b310d46eebdd5b9d4e6cbbb1e6.bindPopup(popup_1f95454b802d49cd07e1c3e084bd7ede)
+        ;
+
+        
+    
+    
+            circle_marker_3ce6d6b310d46eebdd5b9d4e6cbbb1e6.bindTooltip(
+                `<div>
+                     Portal Américas
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_9f8afdff0d4cdb5120b35f71046e97d2 = L.circleMarker(
+                [4.53171458, -74.11939098],
+                {"bubblingMouseEvents": true, "color": "#4575b4", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#4575b4", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18.155690586419755, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_df7c2b7bfb6ee5c4ff84cf42fe6f4f2f = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_bce70cb773230ee82bc171ebb3e884ca = $(`<div id="html_bce70cb773230ee82bc171ebb3e884ca" style="width: 100.0%; height: 100.0%;"><b>Portal Usme</b><br>ID: 09000<br>Corredor: Caracas<br>Demanda media: 217.9<br>Demanda máxima: 1071<br>Períodos faltantes: 0</div>`)[0];
+                popup_df7c2b7bfb6ee5c4ff84cf42fe6f4f2f.setContent(html_bce70cb773230ee82bc171ebb3e884ca);
+            
+        
+
+        circle_marker_9f8afdff0d4cdb5120b35f71046e97d2.bindPopup(popup_df7c2b7bfb6ee5c4ff84cf42fe6f4f2f)
+        ;
+
+        
+    
+    
+            circle_marker_9f8afdff0d4cdb5120b35f71046e97d2.bindTooltip(
+                `<div>
+                     Portal Usme
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_d37864be757bb81b08e66f92107a66bb = L.circleMarker(
+                [4.68394667, -74.05769591],
+                {"bubblingMouseEvents": true, "color": "#d73027", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#d73027", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 24.497434413580248, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_324f7e19ee2ce530a0e0539ca257e31c = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_56ecdfa577dfafaf48ffb8b30ddf8bd1 = $(`<div id="html_56ecdfa577dfafaf48ffb8b30ddf8bd1" style="width: 100.0%; height: 100.0%;"><b>Calle 100 - Marketmedios</b><br>ID: 02300<br>Corredor: Autonorte<br>Demanda media: 294.0<br>Demanda máxima: 1472<br>Períodos faltantes: 0</div>`)[0];
+                popup_324f7e19ee2ce530a0e0539ca257e31c.setContent(html_56ecdfa577dfafaf48ffb8b30ddf8bd1);
+            
+        
+
+        circle_marker_d37864be757bb81b08e66f92107a66bb.bindPopup(popup_324f7e19ee2ce530a0e0539ca257e31c)
+        ;
+
+        
+    
+    
+            circle_marker_d37864be757bb81b08e66f92107a66bb.bindTooltip(
+                `<div>
+                     Calle 100 - Marketmedios
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_2a3c5b177a9078f5c0cf121c77a82371 = L.circleMarker(
+                [4.65823884, -74.06206854],
+                {"bubblingMouseEvents": true, "color": "#4575b4", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#4575b4", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 20.816608796296297, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_26d4f65e5a724c56d0efa8535828fa61 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_03b1a795fd330e4699089481830e3846 = $(`<div id="html_03b1a795fd330e4699089481830e3846" style="width: 100.0%; height: 100.0%;"><b>Calle 72</b><br>ID: 09122<br>Corredor: Caracas<br>Demanda media: 249.8<br>Demanda máxima: 1249<br>Períodos faltantes: 0</div>`)[0];
+                popup_26d4f65e5a724c56d0efa8535828fa61.setContent(html_03b1a795fd330e4699089481830e3846);
+            
+        
+
+        circle_marker_2a3c5b177a9078f5c0cf121c77a82371.bindPopup(popup_26d4f65e5a724c56d0efa8535828fa61)
+        ;
+
+        
+    
+    
+            circle_marker_2a3c5b177a9078f5c0cf121c77a82371.bindTooltip(
+                `<div>
+                     Calle 72
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_295532a0d976c643212f4132b8262af4 = L.circleMarker(
+                [4.63130064, -74.14576938],
+                {"bubblingMouseEvents": true, "color": "#d73027", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#d73027", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 49.255208333333336, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_0d827580036aa84ce3fb251ef3d67058 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_21b62a2fae778400afba83e2285f4a2a = $(`<div id="html_21b62a2fae778400afba83e2285f4a2a" style="width: 100.0%; height: 100.0%;"><b>Banderas</b><br>ID: 05100<br>Corredor: Américas<br>Demanda media: 591.1<br>Demanda máxima: 2065<br>Períodos faltantes: 0</div>`)[0];
+                popup_0d827580036aa84ce3fb251ef3d67058.setContent(html_21b62a2fae778400afba83e2285f4a2a);
+            
+        
+
+        circle_marker_295532a0d976c643212f4132b8262af4.bindPopup(popup_0d827580036aa84ce3fb251ef3d67058)
+        ;
+
+        
+    
+    
+            circle_marker_295532a0d976c643212f4132b8262af4.bindTooltip(
+                `<div>
+                     Banderas
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_7552d7a9ceae3fae61db5c9849cfbb93 = L.circleMarker(
+                [4.6116862, -74.09386888],
+                {"bubblingMouseEvents": true, "color": "#d73027", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#d73027", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 56.97638888888889, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_3c1a55c89d1615a55be228a08d65f3d4 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_1ef1a1a8fef592e173d3c9e0d58283d7 = $(`<div id="html_1ef1a1a8fef592e173d3c9e0d58283d7" style="width: 100.0%; height: 100.0%;"><b>Ricaurte - NQS</b><br>ID: 07111<br>Corredor: NQS<br>Demanda media: 683.7<br>Demanda máxima: 2284<br>Períodos faltantes: 0</div>`)[0];
+                popup_3c1a55c89d1615a55be228a08d65f3d4.setContent(html_1ef1a1a8fef592e173d3c9e0d58283d7);
+            
+        
+
+        circle_marker_7552d7a9ceae3fae61db5c9849cfbb93.bindPopup(popup_3c1a55c89d1615a55be228a08d65f3d4)
+        ;
+
+        
+    
+    
+            circle_marker_7552d7a9ceae3fae61db5c9849cfbb93.bindTooltip(
+                `<div>
+                     Ricaurte - NQS
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_f2772625bb374d31078f681e5abaf44a = L.circleMarker(
+                [4.6816043, -74.12139545],
+                {"bubblingMouseEvents": true, "color": "#d73027", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#d73027", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 42.57864583333333, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_f1f7811c3a3f61cadeea38624401d42e = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_d234ed037db702fc83ab0b106ca5cf73 = $(`<div id="html_d234ed037db702fc83ab0b106ca5cf73" style="width: 100.0%; height: 100.0%;"><b>Portal El Dorado – C.C. NUESTRO BOGOTÁ</b><br>ID: 06000<br>Corredor: Calle 26<br>Demanda media: 510.9<br>Demanda máxima: 1789<br>Períodos faltantes: 0</div>`)[0];
+                popup_f1f7811c3a3f61cadeea38624401d42e.setContent(html_d234ed037db702fc83ab0b106ca5cf73);
+            
+        
+
+        circle_marker_f2772625bb374d31078f681e5abaf44a.bindPopup(popup_f1f7811c3a3f61cadeea38624401d42e)
+        ;
+
+        
+    
+    
+            circle_marker_f2772625bb374d31078f681e5abaf44a.bindTooltip(
+                `<div>
+                     Portal El Dorado – C.C. NUESTRO BOGOTÁ
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_999ed87c81c22e02ed6a0103cd4ff8aa = L.circleMarker(
+                [4.63711879, -74.07932113],
+                {"bubblingMouseEvents": true, "color": "#4575b4", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#4575b4", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 23.41909722222222, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_0c2c631c0de0f846704a374804a516b6 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_cc6f2ff807e372907cd18114fc97f196 = $(`<div id="html_cc6f2ff807e372907cd18114fc97f196" style="width: 100.0%; height: 100.0%;"><b>Universidad Nacional</b><br>ID: 07107<br>Corredor: NQS<br>Demanda media: 281.0<br>Demanda máxima: 982<br>Períodos faltantes: 0</div>`)[0];
+                popup_0c2c631c0de0f846704a374804a516b6.setContent(html_cc6f2ff807e372907cd18114fc97f196);
+            
+        
+
+        circle_marker_999ed87c81c22e02ed6a0103cd4ff8aa.bindPopup(popup_0c2c631c0de0f846704a374804a516b6)
+        ;
+
+        
+    
+    
+            circle_marker_999ed87c81c22e02ed6a0103cd4ff8aa.bindTooltip(
+                `<div>
+                     Universidad Nacional
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_1d5e64fdef52ceaf8f1ca0de172e9396 = L.circleMarker(
+                [4.60464286, -74.06730954],
+                {"bubblingMouseEvents": true, "color": "#4575b4", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#4575b4", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 19.907619598765432, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_1cc0d48bdffb9be4099710764fb4f070 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_93ee91c72aab478cedbd5705de1e0c90 = $(`<div id="html_93ee91c72aab478cedbd5705de1e0c90" style="width: 100.0%; height: 100.0%;"><b>Universidades – CityU</b><br>ID: 06111<br>Corredor: Calle 26<br>Demanda media: 238.9<br>Demanda máxima: 835<br>Períodos faltantes: 0</div>`)[0];
+                popup_1cc0d48bdffb9be4099710764fb4f070.setContent(html_93ee91c72aab478cedbd5705de1e0c90);
+            
+        
+
+        circle_marker_1d5e64fdef52ceaf8f1ca0de172e9396.bindPopup(popup_1cc0d48bdffb9be4099710764fb4f070)
+        ;
+
+        
+    
+    
+            circle_marker_1d5e64fdef52ceaf8f1ca0de172e9396.bindTooltip(
+                `<div>
+                     Universidades – CityU
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_a5625b13c5ef4edef89c2cac07c67e15 = L.circleMarker(
+                [4.65003852, -74.07834591],
+                {"bubblingMouseEvents": true, "color": "#4575b4", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#4575b4", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 22.71581790123457, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_8c4334f24aa00efde7e436c333e24d9a = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_af980a4395d16d6b207acf50c06f6b13 = $(`<div id="html_af980a4395d16d6b207acf50c06f6b13" style="width: 100.0%; height: 100.0%;"><b>Movistar Arena</b><br>ID: 07105<br>Corredor: NQS<br>Demanda media: 272.6<br>Demanda máxima: 1313<br>Períodos faltantes: 0</div>`)[0];
+                popup_8c4334f24aa00efde7e436c333e24d9a.setContent(html_af980a4395d16d6b207acf50c06f6b13);
+            
+        
+
+        circle_marker_a5625b13c5ef4edef89c2cac07c67e15.bindPopup(popup_8c4334f24aa00efde7e436c333e24d9a)
+        ;
+
+        
+    
+    
+            circle_marker_a5625b13c5ef4edef89c2cac07c67e15.bindTooltip(
+                `<div>
+                     Movistar Arena
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+    
+            var circle_marker_ebd0a65b7d889aa08660bfa1fde1fa12 = L.circleMarker(
+                [4.61524712, -74.06922646],
+                {"bubblingMouseEvents": true, "color": "#d73027", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#d73027", "fillOpacity": 0.75, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 28.160050154320988, "stroke": true, "weight": 3}
+            ).addTo(map_43f7fe47cf5affe1b064f68e50d7eaec);
+        
+    
+        var popup_29fbb9675f04069f70b233dcb5185b22 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f476a5a22c4bacf32e670e98ec05c510 = $(`<div id="html_f476a5a22c4bacf32e670e98ec05c510" style="width: 100.0%; height: 100.0%;"><b>Museo Nacional</b><br>ID: 10009<br>Corredor: Carrera 7-10<br>Demanda media: 337.9<br>Demanda máxima: 1434<br>Períodos faltantes: 0</div>`)[0];
+                popup_29fbb9675f04069f70b233dcb5185b22.setContent(html_f476a5a22c4bacf32e670e98ec05c510);
+            
+        
+
+        circle_marker_ebd0a65b7d889aa08660bfa1fde1fa12.bindPopup(popup_29fbb9675f04069f70b233dcb5185b22)
+        ;
+
+        
+    
+    
+            circle_marker_ebd0a65b7d889aa08660bfa1fde1fa12.bindTooltip(
+                `<div>
+                     Museo Nacional
+                 </div>`,
+                {
+  "sticky": true,
+}
+            );
+        
+</script>
+</html>

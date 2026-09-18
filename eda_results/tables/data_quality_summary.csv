@@ -1,0 +1,13 @@
+metric,value
+observation_rows,51840
+context_rows,4320
+station_count,12
+duplicate_observation_keys,0
+duplicate_context_timestamps,0
+missing_station_periods,0
+station_time_gaps,0
+observation_null_values,0
+context_null_values,0
+negative_demand_values,0
+observation_timestamps_without_context,0
+context_timestamps_without_observations,0
