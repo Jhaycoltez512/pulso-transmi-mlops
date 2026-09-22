@@ -78,6 +78,11 @@ class SupabaseLoader:
         response = self.client.patch(f"/{table}", params={"id": f"eq.{identifier}"}, json=row)
         response.raise_for_status()
 
+    def select(self, table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        response = self.client.get(f"/{table}", params=params)
+        response.raise_for_status()
+        return response.json()
+
 
 def main() -> None:
     load_dotenv()

@@ -34,13 +34,16 @@ create table public.ingestion_runs (
   observation_rows_read integer not null default 0 check (observation_rows_read >= 0),
   context_rows_read integer not null default 0 check (context_rows_read >= 0),
   error_message text,
-  git_commit varchar(40)
+  git_commit varchar(40),
+  data_version text,
+  mlflow_run_id text
 );
 
 create table public.sync_state (
   stream_name text primary key check (stream_name in ('observations', 'context')),
   last_cursor text,
   last_observed_at timestamptz,
+  last_released_at timestamptz,
   last_ingestion_run_id uuid references public.ingestion_runs(id) on delete set null,
   updated_at timestamptz not null default now()
 );
@@ -60,11 +63,13 @@ create table public.observations (
   station_id varchar(5) not null references public.stations(station_id),
   observed_at timestamptz not null,
   demand integer not null check (demand >= 0),
+  released_at timestamptz,
   ingestion_run_id uuid references public.ingestion_runs(id) on delete set null,
   received_at timestamptz not null default now(),
   primary key (station_id, observed_at)
 );
 create index observations_observed_at_idx on public.observations(observed_at);
+create index observations_released_at_idx on public.observations(released_at);
 
 create table public.data_quality_results (
   id uuid primary key default gen_random_uuid(),
@@ -110,6 +115,8 @@ create table public.model_versions (
   training_data_end timestamptz,
   git_commit varchar(40),
   is_active boolean not null default false,
+  data_version text,
+  mlflow_run_id text,
   created_at timestamptz not null default now()
 );
 create unique index model_versions_one_active_idx on public.model_versions(is_active) where is_active;
@@ -126,7 +133,8 @@ create table public.training_runs (
   validation_end timestamptz,
   trigger_reason text not null,
   status text not null check (status in ('running', 'succeeded', 'failed')),
-  parameters jsonb not null default '{}'::jsonb
+  parameters jsonb not null default '{}'::jsonb,
+  mlflow_run_id text
 );
 
 create table public.model_metrics (
