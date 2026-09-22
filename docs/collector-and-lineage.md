@@ -55,8 +55,13 @@ publique objetivos nuevos.
 
 ## Automatización en GitHub Actions
 
-El workflow `.github/workflows/collector.yml` programa la ejecución a los
-minutos 03, 18, 33 y 48 de cada hora. Configura estos secrets en GitHub:
+El workflow `.github/workflows/collector.yml` programa la ejecución al minuto
+03 de cada hora. GitHub no garantiza disparos puntuales de `schedule` con
+frecuencia menor a una hora: en pruebas, un cron cada 15 minutos disparó una
+sola vez en más de dos horas, tanto en repositorio privado como público. Como
+`sync_stream_observations.py` es idempotente, una corrida horaria no pierde
+datos, solo acumula más filas nuevas por ejecución. Configura estos secrets en
+GitHub:
 
 - `PULSO_API_KEY`
 - `SUPABASE_URL`

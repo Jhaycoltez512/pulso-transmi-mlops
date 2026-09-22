@@ -28,9 +28,11 @@ from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
 
 LAGS = [1, 2, 4, 8, 96, 192, 672]
 ROLLING_WINDOWS = [4, 12, 96, 672]
+CONTEXT_FEATURES = ["rain_forecast", "temperature_forecast", "event_intensity"]
 NUMERIC_FEATURES = [
     "hour_sin", "hour_cos", "weekday_sin", "weekday_cos", "is_weekend", "current_demand",
     *[f"lag_{lag}" for lag in LAGS], *[f"rolling_mean_{window}" for window in ROLLING_WINDOWS],
+    *CONTEXT_FEATURES,
 ]
 FEATURES = ["station_id", *NUMERIC_FEATURES]
 
@@ -95,6 +97,7 @@ def record_lineage(data_cutoff: str, cycle_id: str, metrics: dict[str, Any]) -> 
 def add_origin_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Build features available at the forecast origin, never from future demand."""
     data = frame.sort_values(["station_id", "observed_at"]).copy()
+    data = data.rename(columns={feature: f"{feature}_origin" for feature in CONTEXT_FEATURES})
     grouped = data.groupby("station_id")["demand"]
     data["current_demand"] = data["demand"]
     for lag in LAGS:
@@ -115,7 +118,20 @@ def add_target_calendar(data: pd.DataFrame, horizon_minutes: int) -> pd.DataFram
     result["weekday_cos"] = np.cos(2 * np.pi * local.dt.dayofweek / 7)
     result["is_weekend"] = (local.dt.dayofweek >= 5).astype(int)
     result["target_demand"] = result.groupby("station_id")["demand"].shift(-horizon_minutes // 15)
+    result = result.merge(context_at_timestamp(data), on="target_at", how="left")
+    for feature in CONTEXT_FEATURES:
+        result[feature] = result[feature].fillna(result[f"{feature}_origin"])
     return result.dropna(subset=[*FEATURES, "target_demand"]).reset_index(drop=True)
+
+
+def context_at_timestamp(data: pd.DataFrame) -> pd.DataFrame:
+    """Map each known timestamp to its forecast context, for lookup at a future target_at."""
+    origin_columns = [f"{feature}_origin" for feature in CONTEXT_FEATURES]
+    return (
+        data[["observed_at", *origin_columns]]
+        .drop_duplicates("observed_at")
+        .rename(columns={"observed_at": "target_at", **dict(zip(origin_columns, CONTEXT_FEATURES))})
+    )
 
 
 def split_by_target(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -177,6 +193,9 @@ def prediction_rows(data: pd.DataFrame, cycle: dict, models: dict[int, CatBoostR
         inference["weekday_sin"] = np.sin(2 * np.pi * local.dt.dayofweek / 7)
         inference["weekday_cos"] = np.cos(2 * np.pi * local.dt.dayofweek / 7)
         inference["is_weekend"] = (local.dt.dayofweek >= 5).astype(int)
+        inference = inference.merge(context_at_timestamp(data), on="target_at", how="left")
+        for feature in CONTEXT_FEATURES:
+            inference[feature] = inference[feature].fillna(inference[f"{feature}_origin"])
         values = np.clip(models[horizon].predict(inference[FEATURES]), 0, None)
         target_lookup = {(item.station_id, pd.Timestamp(item.target_at)): item for item in targets.itertuples()}
         for row, value in zip(inference.itertuples(), values, strict=True):

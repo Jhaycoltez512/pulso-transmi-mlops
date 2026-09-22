@@ -46,10 +46,15 @@ contiene el trabajo de experimentación. Incluye:
 - EDA reproducible en `analysis/eda.py` y resultados en `eda_results/`;
 - baseline de `HistGradientBoostingRegressor` con retardos diario y semanal;
 - baseline naive semanal (demanda de la misma estación siete días antes);
+- CatBoost multi-horizonte directo con lags, medias móviles y contexto
+  (lluvia, temperatura, eventos) unido por el momento objetivo;
+- collector incremental con trazabilidad de datos y modelo en Supabase,
+  automatizado por hora en GitHub Actions;
 - generación y validación local de una vista previa de submission, sin enviarla.
 
-Consulta [la guía de Supabase](docs/supabase.md) y [la guía de baselines](docs/ml-baselines.md)
-para los comandos, el particionado temporal y las métricas.
+Consulta [la guía de Supabase](docs/supabase.md), [la guía de baselines](docs/ml-baselines.md)
+y [la guía del collector y lineage](docs/collector-and-lineage.md) para los
+comandos, el particionado temporal y las métricas.
 
 ## Uso del SDK
 
