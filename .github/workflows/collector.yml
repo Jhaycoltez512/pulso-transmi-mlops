@@ -11,15 +11,15 @@ permissions:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install collector dependencies
-        run: python -m pip install -e '.[mlops]'
+      - name: Install pipeline dependencies
+        run: python -m pip install -e '.[ml,mlops]'
       - name: Collect and version new observations
         env:
           PULSO_API_URL: ${{ vars.PULSO_API_URL }}
@@ -29,3 +29,13 @@ jobs:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_EXPERIMENT_NAME: pulso-transmi
         run: python scripts/sync_stream_observations.py
+      - name: Evaluate drift, decide, predict and submit
+        env:
+          PULSO_API_URL: ${{ vars.PULSO_API_URL }}
+          PULSO_API_KEY: ${{ secrets.PULSO_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_EXPERIMENT_NAME: pulso-transmi
+          PULSO_SUBMIT_ENABLED: ${{ vars.PULSO_SUBMIT_ENABLED }}
+        run: python scripts/run_forecast_cycle.py

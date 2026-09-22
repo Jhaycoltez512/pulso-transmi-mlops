@@ -46,10 +46,18 @@ contiene el trabajo de experimentación. Incluye:
 - EDA reproducible en `analysis/eda.py` y resultados en `eda_results/`;
 - baseline de `HistGradientBoostingRegressor` con retardos diario y semanal;
 - baseline naive semanal (demanda de la misma estación siete días antes);
-- CatBoost multi-horizonte directo con lags, medias móviles y contexto
-  (lluvia, temperatura, eventos) unido por el momento objetivo;
+- CatBoost multi-horizonte directo con rezagos y medias móviles, ensamblado
+  con el baseline naive semanal; el modelo y el peso de mezcla se validaron
+  con un backtest walk-forward de varias ventanas para distinguir mejoras
+  reales de ruido entre ventanas;
 - collector incremental con trazabilidad de datos y modelo en Supabase,
   automatizado por hora en GitHub Actions;
+- ciclo operativo automático (`run_forecast_cycle.py`): evalúa la exactitud
+  reciente contra la demanda real ya liberada, mide drift de datos (PSI),
+  decide con una regla explícita si conserva o reentrena el modelo
+  (persistido en Supabase Storage), predice los 4 horizontes para las 12
+  estaciones y envía la submission por POST, registrando éxito o error de
+  cada corrida;
 - generación y validación local de una vista previa de submission, sin enviarla.
 
 Consulta [la guía de Supabase](docs/supabase.md), [la guía de baselines](docs/ml-baselines.md)

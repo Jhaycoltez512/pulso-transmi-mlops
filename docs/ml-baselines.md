@@ -61,7 +61,7 @@ En el mismo corte obtuvo `83.02%` en validación y `83.11%` en prueba. Sus
 resultados se guardan en `artifacts/weekly_naive.joblib` y
 `artifacts/weekly_naive_metrics.json`.
 
-## CatBoost multi-horizonte directo
+## CatBoost multi-horizonte directo + ensamble con naive semanal
 
 `scripts/train_catboost_direct.py` entrena un `CatBoostRegressor` independiente
 por horizonte (15, 30, 45 y 60 minutos, o los horizontes del ciclo activo), en
@@ -69,13 +69,18 @@ vez de encadenar predicciones recursivas. Usa `loss_function="MAE"`, alineado
 con WAPE porque minimiza la mediana condicional en lugar de la media.
 
 Variables: calendario cíclico del momento objetivo, demanda actual, rezagos
-(`lag_1` a `lag_672`) y medias móviles (`rolling_mean_4` a `rolling_mean_672`),
-más contexto de lluvia, temperatura y eventos. El contexto se une por el
-momento objetivo (`target_at`), no por el de origen: como es un pronóstico
-conocido con antelación en la tabla `context`, no genera fuga de datos. Cuando
-el pronóstico de contexto aún no llega tan lejos como el horizonte pedido
-(la tabla `context` puede ir por detrás de `observations`), usa como respaldo
-el último valor de contexto conocido en el origen.
+(`lag_1` a `lag_672`) y medias móviles (`rolling_mean_4` a `rolling_mean_672`).
+
+La predicción final no es la salida cruda de CatBoost: se mezcla con el
+baseline naive semanal, `0.75 * catboost + 0.25 * naive` (`ENSEMBLE_WEIGHT` en
+el script), con retroceso a CatBoost solo si falta la demanda de hace siete
+días. El peso se eligió con `scripts/backtest_ensemble.py`, que barre pesos de
+0.5 a 1.0 sobre los mismos folds walk-forward: 0.70–0.85 es cercano al óptimo
+en los cuatro horizontes, con ganancia sobre CatBoost solo muy por encima del
+ruido entre folds (0.0011–0.0047 de WAPE, contra folds con desviación
+estándar de 0.0003–0.0014). Afinar el peso por horizonte en vez de usar uno
+global ganaría menos de 0.0006 de WAPE adicional — no vale el riesgo de
+sobreajustar a solo 3 folds.
 
 ```bash
 python scripts/train_catboost_direct.py
@@ -85,24 +90,69 @@ En el mismo corte temporal que los otros baselines:
 
 | Horizonte | WAPE validación | Accuracy validación | WAPE prueba | Accuracy prueba |
 |---|---:|---:|---:|---:|
-| 15 min | 0.1315 | 86.85% | 0.1291 | 87.09% |
-| 30 min | 0.1348 | 86.52% | 0.1316 | 86.84% |
-| 45 min | 0.1385 | 86.15% | 0.1358 | 86.42% |
-| 60 min | 0.1416 | 85.84% | 0.1401 | 85.99% |
+| 15 min | 0.1289 | 87.11% | 0.1289 | 87.11% |
+| 30 min | 0.1308 | 86.92% | 0.1308 | 86.92% |
+| 45 min | 0.1339 | 86.61% | 0.1324 | 86.76% |
+| 60 min | 0.1345 | 86.55% | 0.1367 | 86.33% |
 
-Se probó además ponderar el loss por el inverso de la demanda media de cada
-estación, buscando alinear el entrenamiento con WAPE promediado por estación
-(en vez de MAE global). Empeoró el WAPE en los cuatro horizontes y se
-descartó: las estaciones con peor desempeño (`02300`, `10009`) lo son de forma
-consistente en los tres modelos del repositorio (naive, GBM y CatBoost), lo
-que apunta a menor predictibilidad de su demanda y no a un problema de escala
-en el loss.
+### Experimentos descartados
+
+Un solo split de validación/prueba (7 días, 8.064 filas) tiene ruido del mismo
+orden que las mejoras que se buscan, así que dos cambios se evaluaron con
+`scripts/backtest_catboost_direct.py` (backtest *walk-forward*: reentrena en
+una ventana creciente y evalúa en varias ventanas de prueba de 7 días
+sucesivas, no solapadas) antes de decidir:
+
+- **Ponderar el loss por el inverso de la demanda media de cada estación**,
+  buscando alinear el entrenamiento con WAPE promediado por estación (en vez
+  de MAE global). Empeoró el WAPE en los cuatro horizontes de un solo split y
+  se descartó sin necesidad de backtest.
+- **Variables de contexto (lluvia, temperatura, eventos) unidas por el
+  momento objetivo `target_at`**. En un solo split parecía mejorar el WAPE de
+  prueba (~0.0005–0.0014), pero un backtest pareado de 3 folds mostró que el
+  signo de la diferencia cambiaba entre folds en los cuatro horizontes, con un
+  promedio (±0.0001–0.0002) muy por debajo de la desviación estándar entre
+  folds (0.0005–0.0010): la mejora observada era ruido de esa ventana, no
+  señal real. Se revirtió.
+
+En ambos casos las estaciones con peor desempeño (`02300`, `10009`) lo son de
+forma consistente en los tres modelos del repositorio (naive, GBM y
+CatBoost), lo que apunta a menor predictibilidad de su demanda y no a un
+problema de escala o de variables faltantes.
 
 Resultados y modelo se guardan en `artifacts/catboost_direct_metrics.json` y
 `artifacts/catboost_direct.joblib`. Cada entrenamiento también registra
 lineage en Supabase (`model_versions`, `training_runs`, `model_metrics`) con
 el `data_version` de la corrida de datos usada y el commit de Git activo al
 momento de entrenar.
+
+## Backtest walk-forward de CatBoost
+
+`scripts/backtest_catboost_direct.py` entrena y evalúa en varias ventanas de
+prueba sucesivas de 7 días (ventana de entrenamiento creciente) en lugar de un
+solo split, para poder distinguir una mejora real de ruido entre ventanas.
+Reutiliza `FEATURES`, `model` y las funciones de features de
+`train_catboost_direct.py`; no duplica lógica.
+
+```bash
+python scripts/backtest_catboost_direct.py
+```
+
+Guarda el detalle por fold en `artifacts/catboost_direct_backtest.json` e
+imprime el WAPE promedio y su desviación estándar entre folds por horizonte.
+Con la historia disponible (~46 días) obtiene 3 folds por horizonte; ese
+número crece a medida que el collector acumula más datos. Úsalo para juzgar
+cualquier cambio de features o hiperparámetros antes de adoptarlo: si la
+diferencia observada es menor que la desviación estándar entre folds, no hay
+evidencia suficiente de que el cambio ayude.
+
+`scripts/backtest_ensemble.py` hace lo mismo pero barre un peso de mezcla
+CatBoost/naive sobre los mismos folds, para elegir el peso con evidencia en
+vez de un solo split. Guarda el detalle en `artifacts/ensemble_backtest.json`.
+
+```bash
+python scripts/backtest_ensemble.py
+```
 
 ## Vista previa y validación de submission
 

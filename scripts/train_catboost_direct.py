@@ -28,13 +28,16 @@ from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
 
 LAGS = [1, 2, 4, 8, 96, 192, 672]
 ROLLING_WINDOWS = [4, 12, 96, 672]
-CONTEXT_FEATURES = ["rain_forecast", "temperature_forecast", "event_intensity"]
 NUMERIC_FEATURES = [
     "hour_sin", "hour_cos", "weekday_sin", "weekday_cos", "is_weekend", "current_demand",
     *[f"lag_{lag}" for lag in LAGS], *[f"rolling_mean_{window}" for window in ROLLING_WINDOWS],
-    *CONTEXT_FEATURES,
 ]
 FEATURES = ["station_id", *NUMERIC_FEATURES]
+WEEKLY_NAIVE_LAG = timedelta(days=7)
+# Share given to the CatBoost prediction vs. the weekly seasonal-naive prediction. Picked with
+# scripts/backtest_ensemble.py: a walk-forward sweep found 0.70-0.85 near-optimal at every horizon,
+# with WAPE gains over pure CatBoost well above the noise between folds (see docs/ml-baselines.md).
+ENSEMBLE_WEIGHT = 0.75
 
 
 def git_commit() -> str | None:
@@ -42,30 +45,42 @@ def git_commit() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def record_lineage(data_cutoff: str, cycle_id: str, metrics: dict[str, Any]) -> None:
-    """Link the model artifact, dataset version, metrics and optional MLflow run."""
+def performance_thresholds(metrics: dict[str, Any], factor: float = 1.15) -> dict[str, float]:
+    """Recent-WAPE ceiling per horizon: this model's own validation WAPE plus a relative margin."""
+    return {horizon: result["validation"]["mean_station_wape"] * factor for horizon, result in metrics.items()}
+
+
+def record_lineage(
+    data_cutoff: str, cycle_id: str, metrics: dict[str, Any], trigger_reason: str = "direct-multihorizon-training",
+) -> dict[str, Any] | None:
+    """Link the model artifact, dataset version, metrics and optional MLflow run. Marks the new version active."""
     load_dotenv()
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SECRET_KEY") or os.environ.get("SUPABASE_KEY")
     if not url or not key:
         print("Supabase model lineage skipped: credentials are not configured.")
-        return
+        return None
     loader = SupabaseLoader(url, key)
     try:
         ingestions = loader.select("ingestion_runs", {"status": "eq.succeeded", "order": "finished_at.desc", "limit": 1})
         data_version = ingestions[0].get("data_version") if ingestions else None
         version = f"catboost-{pd.Timestamp(data_cutoff).strftime('%Y%m%dT%H%M%SZ')}"
+        deactivate = loader.client.patch("/model_versions", params={"is_active": "eq.true"}, json={"is_active": False})
+        deactivate.raise_for_status()
         model_row = {
-            "name": "catboost-direct", "version": version, "algorithm": "CatBoostRegressor",
+            "name": "catboost-direct", "version": version, "algorithm": "CatBoostRegressor+WeeklyNaiveBlend",
             "artifact_uri": "artifacts/catboost_direct.joblib", "trained_at": pd.Timestamp.now(tz="UTC").isoformat(),
-            "training_data_end": data_cutoff, "git_commit": git_commit(), "data_version": data_version,
+            "training_data_end": data_cutoff, "git_commit": git_commit(), "data_version": data_version, "is_active": True,
         }
         loader.upsert("model_versions", [model_row], "version")
         model_version = loader.select("model_versions", {"version": f"eq.{version}", "limit": 1})[0]
         training_run = loader.insert("training_runs", {
             "model_version_id": model_version["id"], "training_end": data_cutoff,
-            "trigger_reason": "direct-multihorizon-training", "status": "succeeded",
-            "parameters": {"horizons": sorted(map(int, metrics)), "features": FEATURES},
+            "trigger_reason": trigger_reason, "status": "succeeded",
+            "parameters": {
+                "horizons": sorted(map(int, metrics)), "features": FEATURES, "ensemble_weight": ENSEMBLE_WEIGHT,
+                "performance_thresholds": performance_thresholds(metrics),
+            },
         })
         for horizon, result in metrics.items():
             for split in ("validation", "test"):
@@ -90,6 +105,7 @@ def record_lineage(data_cutoff: str, cycle_id: str, metrics: dict[str, Any]) -> 
         except Exception as error:
             print(f"MLflow model tracking skipped: {error}")
         print(f"Model lineage recorded: version={version}, data_version={data_version or 'unknown'}.")
+        return {"version": version, "model_version_id": model_version["id"], "training_run_id": training_run["id"]}
     finally:
         loader.close()
 
@@ -97,7 +113,6 @@ def record_lineage(data_cutoff: str, cycle_id: str, metrics: dict[str, Any]) -> 
 def add_origin_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Build features available at the forecast origin, never from future demand."""
     data = frame.sort_values(["station_id", "observed_at"]).copy()
-    data = data.rename(columns={feature: f"{feature}_origin" for feature in CONTEXT_FEATURES})
     grouped = data.groupby("station_id")["demand"]
     data["current_demand"] = data["demand"]
     for lag in LAGS:
@@ -118,20 +133,20 @@ def add_target_calendar(data: pd.DataFrame, horizon_minutes: int) -> pd.DataFram
     result["weekday_cos"] = np.cos(2 * np.pi * local.dt.dayofweek / 7)
     result["is_weekend"] = (local.dt.dayofweek >= 5).astype(int)
     result["target_demand"] = result.groupby("station_id")["demand"].shift(-horizon_minutes // 15)
-    result = result.merge(context_at_timestamp(data), on="target_at", how="left")
-    for feature in CONTEXT_FEATURES:
-        result[feature] = result[feature].fillna(result[f"{feature}_origin"])
     return result.dropna(subset=[*FEATURES, "target_demand"]).reset_index(drop=True)
 
 
-def context_at_timestamp(data: pd.DataFrame) -> pd.DataFrame:
-    """Map each known timestamp to its forecast context, for lookup at a future target_at."""
-    origin_columns = [f"{feature}_origin" for feature in CONTEXT_FEATURES]
-    return (
-        data[["observed_at", *origin_columns]]
-        .drop_duplicates("observed_at")
-        .rename(columns={"observed_at": "target_at", **dict(zip(origin_columns, CONTEXT_FEATURES))})
-    )
+def naive_prediction_at_target(data: pd.DataFrame, frame: pd.DataFrame) -> np.ndarray:
+    """Demand seven days before each row's target_at: the weekly seasonal-naive forecast."""
+    lookup = data[["station_id", "observed_at", "demand"]].rename(columns={"observed_at": "naive_at", "demand": "naive_prediction"})
+    keys = pd.DataFrame({"station_id": frame["station_id"].to_numpy(), "naive_at": (frame["target_at"] - WEEKLY_NAIVE_LAG).to_numpy()})
+    return keys.merge(lookup, on=["station_id", "naive_at"], how="left")["naive_prediction"].to_numpy()
+
+
+def blend_predictions(catboost_pred: np.ndarray, naive_pred: np.ndarray, weight: float = ENSEMBLE_WEIGHT) -> np.ndarray:
+    """Average CatBoost with the weekly-naive forecast; fall back to CatBoost alone where naive is unavailable."""
+    naive_filled = np.where(np.isnan(naive_pred), catboost_pred, naive_pred)
+    return np.clip(weight * catboost_pred + (1 - weight) * naive_filled, 0, None)
 
 
 def split_by_target(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -163,8 +178,10 @@ def train_models(data: pd.DataFrame, horizons: list[int]) -> tuple[dict[int, Cat
         fitted.fit(train[FEATURES], train["target_demand"], cat_features=["station_id"])
         validation_scores = validation[["station_id", "target_demand"]].rename(columns={"target_demand": "demand"})
         test_scores = test[["station_id", "target_demand"]].rename(columns={"target_demand": "demand"})
-        validation_metrics = station_metrics(validation_scores, fitted.predict(validation[FEATURES]))
-        test_metrics = station_metrics(test_scores, fitted.predict(test[FEATURES]))
+        validation_predictions = blend_predictions(fitted.predict(validation[FEATURES]), naive_prediction_at_target(data, validation))
+        test_predictions = blend_predictions(fitted.predict(test[FEATURES]), naive_prediction_at_target(data, test))
+        validation_metrics = station_metrics(validation_scores, validation_predictions)
+        test_metrics = station_metrics(test_scores, test_predictions)
         models[horizon] = fitted
         report[str(horizon)] = {
             "train_rows": len(train), "validation_rows": len(validation), "test_rows": len(test),
@@ -193,10 +210,7 @@ def prediction_rows(data: pd.DataFrame, cycle: dict, models: dict[int, CatBoostR
         inference["weekday_sin"] = np.sin(2 * np.pi * local.dt.dayofweek / 7)
         inference["weekday_cos"] = np.cos(2 * np.pi * local.dt.dayofweek / 7)
         inference["is_weekend"] = (local.dt.dayofweek >= 5).astype(int)
-        inference = inference.merge(context_at_timestamp(data), on="target_at", how="left")
-        for feature in CONTEXT_FEATURES:
-            inference[feature] = inference[feature].fillna(inference[f"{feature}_origin"])
-        values = np.clip(models[horizon].predict(inference[FEATURES]), 0, None)
+        values = blend_predictions(models[horizon].predict(inference[FEATURES]), naive_prediction_at_target(data, inference))
         target_lookup = {(item.station_id, pd.Timestamp(item.target_at)): item for item in targets.itertuples()}
         for row, value in zip(inference.itertuples(), values, strict=True):
             target = target_lookup.get((row.station_id, row.target_at))
@@ -220,7 +234,10 @@ def main() -> None:
     models, metrics = train_models(data, horizons)
     data_cutoff = cycle["data_cutoff"] if cycle else data["observed_at"].max().isoformat()
     ARTIFACTS_DIR.mkdir(exist_ok=True)
-    joblib.dump({"models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics}, ARTIFACTS_DIR / "catboost_direct.joblib")
+    joblib.dump(
+        {"models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics, "ensemble_weight": ENSEMBLE_WEIGHT},
+        ARTIFACTS_DIR / "catboost_direct.joblib",
+    )
     (ARTIFACTS_DIR / "catboost_direct_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     record_lineage(data_cutoff, cycle["cycle_id"] if cycle else "no-active-cycle", metrics)
     print(f"Trained direct CatBoost models for horizons {horizons}.")

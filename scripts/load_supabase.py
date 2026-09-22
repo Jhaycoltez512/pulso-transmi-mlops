@@ -83,6 +83,29 @@ class SupabaseLoader:
         response.raise_for_status()
         return response.json()
 
+    def insert_many(self, table: str, rows: list[dict[str, Any]]) -> None:
+        for batch in batches(rows):
+            response = self.client.post(f"/{table}", json=batch, headers={"Prefer": "return=minimal"})
+            response.raise_for_status()
+
+
+def upload_object(url: str, key: str, bucket: str, path: str, data: bytes) -> None:
+    """Upload (or overwrite) a file in Supabase Storage using the service-role key."""
+    storage_url = f"{url.rstrip('/')}/storage/v1"
+    response = httpx.post(
+        f"{storage_url}/object/{bucket}/{path}", content=data, timeout=60,
+        headers={"apikey": key, "Authorization": f"Bearer {key}", "x-upsert": "true", "Content-Type": "application/octet-stream"},
+    )
+    response.raise_for_status()
+
+
+def download_object(url: str, key: str, bucket: str, path: str) -> bytes:
+    """Download a file previously stored with upload_object."""
+    storage_url = f"{url.rstrip('/')}/storage/v1"
+    response = httpx.get(f"{storage_url}/object/{bucket}/{path}", timeout=60, headers={"apikey": key, "Authorization": f"Bearer {key}"})
+    response.raise_for_status()
+    return response.content
+
 
 def main() -> None:
     load_dotenv()
