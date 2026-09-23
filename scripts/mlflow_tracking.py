@@ -38,5 +38,6 @@ def log_run(
         for name, content in artifacts.items():
             mlflow.log_dict(content, name)
         for path in artifact_paths or []:
-            mlflow.log_artifact(str(path))
+            if Path(path).exists():
+                mlflow.log_artifact(str(path))
         return active_run.info.run_id
