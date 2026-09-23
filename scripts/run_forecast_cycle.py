@@ -309,14 +309,16 @@ def main() -> None:
             submit_result = {"status": "pending", "response_payload": None, "error_message": "PULSO_SUBMIT_ENABLED=false", "external_submission_id": None}
             print("Submission skipped: PULSO_SUBMIT_ENABLED=false.")
 
-        loader.insert("submissions", {
+        # Repeated runs within the same still-open cycle, with no reason to retrain again,
+        # reuse the same idempotency_key -- upsert instead of insert so that doesn't 409.
+        loader.upsert("submissions", [{
             "external_submission_id": submit_result["external_submission_id"],
             "forecast_run_id": forecast_run_id, "cycle_id": cycle["cycle_id"],
             "client_run_id": payload["client_run_id"], "idempotency_key": idempotency_key,
             "submitted_at": now.isoformat() if submit_enabled else None,
             "status": submit_result["status"], "response_payload": submit_result["response_payload"],
             "error_message": submit_result["error_message"],
-        })
+        }], "idempotency_key")
 
         loader.patch("forecast_runs", forecast_run_id, {"status": "succeeded", "finished_at": pd.Timestamp.now(tz="UTC").isoformat()})
         print(f"Forecast run complete: action={action}, predictions={len(predictions)}, submission={submit_result['status']}.")
