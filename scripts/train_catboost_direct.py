@@ -38,6 +38,8 @@ WEEKLY_NAIVE_LAG = timedelta(days=7)
 # scripts/backtest_ensemble.py: a walk-forward sweep found 0.70-0.85 near-optimal at every horizon,
 # with WAPE gains over pure CatBoost well above the noise between folds (see docs/ml-baselines.md).
 ENSEMBLE_WEIGHT = 0.75
+# MLflow Model Registry name; the `champion` alias always points at the active version.
+REGISTERED_MODEL_NAME = "pulso-catboost"
 
 
 def git_commit() -> str | None:
@@ -52,6 +54,7 @@ def performance_thresholds(metrics: dict[str, Any], factor: float = 1.15) -> dic
 
 def record_lineage(
     data_cutoff: str, cycle_id: str, metrics: dict[str, Any], trigger_reason: str = "direct-multihorizon-training",
+    models: dict[int, CatBoostRegressor] | None = None,
 ) -> dict[str, Any] | None:
     """Link the model artifact, dataset version, metrics and optional MLflow run. Marks the new version active."""
     load_dotenv()
@@ -106,6 +109,11 @@ def record_lineage(
                 params={"horizons": sorted(map(int, metrics)), "feature_count": len(FEATURES)}, metrics=flat_metrics,
                 artifacts={"metrics.json": metrics, "data_manifest.json": data_manifest},
                 artifact_paths=[ARTIFACTS_DIR / "catboost_direct.joblib", ARTIFACTS_DIR / "catboost_direct_metrics.json"],
+                model_bundle=(
+                    {"models": models, "features": FEATURES, "horizons": sorted(models), "ensemble_weight": ENSEMBLE_WEIGHT}
+                    if models else None
+                ),
+                registered_model_name=REGISTERED_MODEL_NAME,
             )
             if mlflow_id:
                 loader.patch("model_versions", model_version["id"], {"mlflow_run_id": mlflow_id})
@@ -249,7 +257,7 @@ def main() -> None:
         ARTIFACTS_DIR / "catboost_direct.joblib",
     )
     (ARTIFACTS_DIR / "catboost_direct_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    record_lineage(data_cutoff, cycle["cycle_id"] if cycle else "no-active-cycle", metrics)
+    record_lineage(data_cutoff, cycle["cycle_id"] if cycle else "no-active-cycle", metrics, models=models)
     print(f"Trained direct CatBoost models for horizons {horizons}.")
     for horizon in horizons:
         print(f"H={horizon} test accuracy: {metrics[str(horizon)]['test']['mean_station_accuracy']:.2f}")

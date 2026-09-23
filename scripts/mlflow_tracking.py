@@ -15,6 +15,8 @@ def log_run(
     metrics: dict[str, float],
     artifacts: dict[str, Any],
     artifact_paths: list[Path] | None = None,
+    model_bundle: dict[str, Any] | None = None,
+    registered_model_name: str | None = None,
 ) -> str | None:
     """Log an experiment when a persistent MLflow tracking URI is configured.
 
@@ -40,4 +42,33 @@ def log_run(
         for path in artifact_paths or []:
             if Path(path).exists():
                 mlflow.log_artifact(str(path))
+        if model_bundle is not None:
+            try:
+                register_bundle(mlflow, model_bundle, registered_model_name)
+            except Exception as error:  # the registry is a convenience copy; never fail the run over it
+                print(f"MLflow model registry skipped: {error}")
         return active_run.info.run_id
+
+
+def register_bundle(mlflow: Any, bundle: dict[str, Any], registered_model_name: str | None) -> None:
+    """Log the bundle as a pyfunc model in the active run, register it, and point `champion` at it."""
+    import tempfile
+
+    import joblib
+    from mlflow_model import PulsoBundleModel
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "bundle.joblib"
+        joblib.dump(bundle, path)
+        info = mlflow.pyfunc.log_model(
+            name="model",
+            python_model=PulsoBundleModel(),
+            artifacts={"bundle": str(path)},
+            code_paths=[str(Path(__file__).with_name("mlflow_model.py"))],
+            registered_model_name=registered_model_name,
+            pip_requirements=["catboost", "joblib", "numpy", "pandas"],
+        )
+    version = getattr(info, "registered_model_version", None)
+    if registered_model_name and version:
+        mlflow.MlflowClient().set_registered_model_alias(registered_model_name, "champion", version)
+        print(f"Registered {registered_model_name} v{version} as champion.")

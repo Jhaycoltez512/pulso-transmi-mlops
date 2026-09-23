@@ -218,7 +218,7 @@ def load_active_models(url: str, key: str, active_model: dict[str, Any]) -> dict
 
 def retrain_and_persist(url: str, key: str, data: pd.DataFrame, horizons: list[int], cycle: dict, reason: str) -> tuple[dict[int, Any], str, str]:
     models, metrics = train_models(data, horizons)
-    lineage = record_lineage(cycle["data_cutoff"], cycle["cycle_id"], metrics, trigger_reason=reason)
+    lineage = record_lineage(cycle["data_cutoff"], cycle["cycle_id"], metrics, trigger_reason=reason, models=models)
     if lineage is None:
         raise RuntimeError("record_lineage failed: Supabase credentials missing mid-run.")
     persist_model(url, key, lineage["version"], models, horizons, metrics)

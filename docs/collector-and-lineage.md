@@ -71,12 +71,33 @@ que `run_forecast_cycle.py` solo invoca cuando la regla de decisión (drift o
 desempeño) dice `retrain`. Ese único run de MLflow incluye: `data_version`
 como tag, un `data_manifest.json` (filas leídas, `last_observed_at`, y el
 `ingestion_run_id` exacto que produjo ese dato), métricas por horizonte,
-`metrics.json` y el artefacto Joblib del modelo. El mismo `mlflow_run_id`
+`metrics.json` y el modelo en sí. El mismo `mlflow_run_id`
 queda enlazado en Supabase en tres tablas a la vez: `model_versions`,
 `training_runs`, e `ingestion_runs` — así una sola corrida de MLflow
 representa "este dato + este modelo", trazable desde cualquiera de las tres.
 Si no hay ciclo abierto o la regla decide `keep`, no se genera ningún run
 nuevo de MLflow — el modelo activo simplemente se reutiliza.
+
+**Model Registry.** Cada modelo reentrenado se registra además en el Model
+Registry de MLflow (pestaña **Models** en DagsHub) como una versión nueva de
+`pulso-catboost`, y el alias `champion` pasa a apuntar a ella. Así queda
+separado el historial de entrenamientos (Experiments) del modelo versionado
+y el que está en producción (Models). El modelo registrado es un *pyfunc*
+(`scripts/mlflow_model.py`) que envuelve el bundle completo: los 4 CatBoost
+por horizonte y el peso de mezcla con el naive semanal. Se puede cargar desde
+cualquier lado con:
+
+```python
+import mlflow
+model = mlflow.pyfunc.load_model("models:/pulso-catboost@champion")
+# entrada: FEATURES + horizon_minutes (+ weekly_naive para obtener la mezcla)
+```
+
+Devuelve la predicción *antes* de la corrección de sesgo en línea, que
+depende de las predicciones recientes y se aplica en `run_forecast_cycle.py`.
+El pipeline sigue cargando el modelo desde Supabase Storage para predecir
+(es lo que ya estaba probado): el Registry es el registro formal y visible,
+y si falla nunca bloquea el envío.
 
 ## Mecánica de los ciclos
 
