@@ -31,6 +31,13 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
           MLFLOW_EXPERIMENT_NAME: pulso-transmi
         run: python scripts/sync_stream_observations.py
+      - name: Sync weather and event context
+        env:
+          PULSO_API_URL: ${{ vars.PULSO_API_URL }}
+          PULSO_API_KEY: ${{ secrets.PULSO_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python scripts/sync_context.py
       - name: Evaluate drift, decide, predict and submit
         env:
           PULSO_API_URL: ${{ vars.PULSO_API_URL }}

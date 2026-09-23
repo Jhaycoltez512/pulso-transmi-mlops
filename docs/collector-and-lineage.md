@@ -36,10 +36,44 @@ momento corresponde la demanda.
   siguiente corrida (10 min después) vuelve a intentar dentro de la misma
   ventana de 25 minutos.
 
+## Contexto (clima y eventos)
+
+`scripts/sync_context.py` es el equivalente de arriba para `/v1/context`
+(lluvia, temperatura, intensidad de eventos). No es el mismo tipo de script
+por una razón real: `/v1/context` no tiene una variante `/v1/stream/` ni
+semántica de `released_at` como observaciones — es el endpoint de lectura
+normal (`start`/`end`/`cursor`), el mismo que usa la carga inicial
+(`load_supabase.py`). La sincronización es incremental por `start=
+<último observed_at sincronizado>` en vez de por `released_at`.
+
+**Por qué se agregó (23-sep):** el drift de `temperature_forecast` empezó a
+dar lecturas erráticas (ver "Ciclo operativo" más abajo, punto 3 de la regla
+de decisión). Se encontró que `sync_state` de `context` no se
+tocaba desde el 18-sep — la carga inicial nunca tuvo seguimiento automático,
+mientras que `observations` se actualizaba solo cada 10 minutos. El contexto
+llegó a estar más de 2 días atrás de las observaciones.
+
+**Esto no afectaba al modelo.** `train_catboost_direct.py` (el modelo en
+producción) no usa clima/eventos como feature — se probó y se descartó (ver
+`docs/ml-baselines.md`). Lo único afectado era la detección de drift: con
+ventanas "recientes" de 3 días llenas en su mayoría de valores nulos (por el
+atraso), el PSI de clima fluctuaba de forma artificial y podía disparar
+reentrenos innecesarios — no dañinos, pero de más.
+
+**Con el fix en producción se descubrió algo más:** al correrlo, solo trajo
+1 fila nueva. Consultando la API en vivo directamente (sin pasar por
+Supabase) se confirmó que **no hay contexto más nuevo disponible todavía** —
+la propia API libera el contexto más lento que las observaciones, algo que
+ningún script de nuestro lado puede adelantar. El fix sigue siendo necesario:
+sin él, el contexto se habría quedado congelado para siempre incluso cuando
+la API sí libere datos nuevos. Con él, se pone al día automáticamente cada
+10 minutos en cuanto haya algo que sincronizar.
+
 ## Ejecución local
 
 ```bash
 python scripts/sync_stream_observations.py
+python scripts/sync_context.py
 ```
 
 Requiere `PULSO_API_URL`, `PULSO_API_KEY`, `SUPABASE_URL` y
