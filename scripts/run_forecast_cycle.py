@@ -47,12 +47,23 @@ PERFORMANCE_MIN_SAMPLES = 20
 PERFORMANCE_WINDOW_DAYS = 3
 DRIFT_RECENT_WINDOW_DAYS = 3
 DRIFT_REFERENCE_WINDOW_DAYS = 14
+# Below this many real (non-null) observations in the recent window, PSI is noise, not signal:
+# context (weather/events) lags observations by days (scripts/sync_context.py), so a 3-day
+# window can be mostly null -- found live on 2026-09-23, temperature_forecast's PSI swinging
+# 0.07-0.29 between consecutive 10-min runs from a shrinking, shifting sample, not real weather
+# change. context is one row per timestamp (not per station), so a full window is ~3*96=288;
+# 150 is roughly half of that.
+DRIFT_MIN_VALID_SAMPLES = 150
 PSI_THRESHOLD = 0.25
 # event_intensity is sparse (rare events): any 3-day window without events differs a lot from a
 # 14-day one that had some, so its PSI sat at 1.16-1.18 in all 18 measurements and triggered a
 # retrain every single cycle. 2.0 still catches a real jump above that background level.
 PSI_THRESHOLD_OVERRIDES = {"event_intensity": 2.0}
 DRIFT_FEATURES = ["demand", "rain_forecast", "temperature_forecast", "event_intensity"]
+# demand varies per station; weather/events are one value per timestamp, broadcast to all 12
+# stations by the merge in load_training_data() -- dedupe those before counting/scoring so 12
+# copies of the same stale value don't look like a healthy sample.
+PER_TIMESTAMP_FEATURES = {"rain_forecast", "temperature_forecast", "event_intensity"}
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
 BIAS_WINDOW_HOURS = 4
@@ -161,11 +172,18 @@ def compute_data_drift(data: pd.DataFrame, active_model: dict[str, Any] | None) 
     for feature in DRIFT_FEATURES:
         if feature not in data.columns:
             continue
-        psi = population_stability_index(reference[feature].to_numpy(dtype=float), recent[feature].to_numpy(dtype=float))
+        ref_col, recent_col = reference[feature], recent[feature]
+        if feature in PER_TIMESTAMP_FEATURES:
+            ref_col = reference.drop_duplicates("observed_at")[feature]
+            recent_col = recent.drop_duplicates("observed_at")[feature]
+        valid_recent = int(recent_col.notna().sum())
         threshold = PSI_THRESHOLD_OVERRIDES.get(feature, PSI_THRESHOLD)
+        psi = population_stability_index(ref_col.to_numpy(dtype=float), recent_col.to_numpy(dtype=float))
+        insufficient = valid_recent < DRIFT_MIN_VALID_SAMPLES
         rows.append({
             "feature_name": feature, "drift_type": "data", "method": "psi",
-            "value": psi, "threshold": threshold, "triggered": psi > threshold,
+            "value": psi, "threshold": threshold, "triggered": (not insufficient) and psi > threshold,
+            "details": {"valid_samples": valid_recent, "min_required": DRIFT_MIN_VALID_SAMPLES, **({"insufficient_samples": True} if insufficient else {})},
         })
     return rows
 
@@ -313,7 +331,7 @@ def main() -> None:
         ingestion_run_id = ingestions[0]["id"] if ingestions else None
         if ingestion_run_id and drift_rows:
             loader.insert_many("drift_measurements", [
-                {**row, "ingestion_run_id": ingestion_run_id, "details": {}} for row in drift_rows
+                {**row, "ingestion_run_id": ingestion_run_id} for row in drift_rows
             ])
 
         thresholds = ((active_model or {}).get("training_run") or {}).get("parameters", {}).get("performance_thresholds", {})

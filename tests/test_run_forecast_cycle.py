@@ -5,7 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from run_forecast_cycle import BIAS_MIN_SAMPLES, bias_factor, bias_scale, compute_data_drift, decide_action, population_stability_index
+from run_forecast_cycle import BIAS_MIN_SAMPLES, DRIFT_MIN_VALID_SAMPLES, bias_factor, bias_scale, compute_data_drift, decide_action, population_stability_index
 
 
 def test_psi_is_near_zero_for_identical_distributions() -> None:
@@ -110,3 +110,46 @@ def test_event_intensity_uses_its_own_higher_drift_threshold() -> None:
     thresholds = {row["feature_name"]: row["threshold"] for row in rows}
     assert thresholds["event_intensity"] == 2.0
     assert thresholds["demand"] == 0.25
+
+
+def _synthetic_data(days: int, stations: int = 12) -> pd.DataFrame:
+    timestamps = pd.date_range("2026-01-01", periods=days * 96, freq="15min", tz="UTC")
+    frame = pd.concat(
+        [pd.DataFrame({
+            "observed_at": timestamps, "station_id": f"{i:05d}",
+            "demand": np.random.default_rng(i).normal(300, 50, len(timestamps)),
+            "rain_forecast": np.random.default_rng(0).random(len(timestamps)),
+            "temperature_forecast": np.random.default_rng(0).normal(18, 2, len(timestamps)),
+            "event_intensity": np.random.default_rng(0).random(len(timestamps)),
+        }) for i in range(stations)],
+        ignore_index=True,
+    )
+    return frame
+
+
+def test_sparse_recent_context_does_not_trigger_even_if_psi_is_high() -> None:
+    data = _synthetic_data(days=20)
+    # blank most of the 3-day recent window, keeping only the last day -> well under the 150
+    # unique-timestamp minimum, the way real context data lagging observations by days does.
+    recent_start = data["observed_at"].max() - timedelta(days=3)
+    cutoff = data["observed_at"].max() - timedelta(days=1)
+    sparse_mask = (data["observed_at"] > recent_start) & (data["observed_at"] < cutoff)
+    data.loc[sparse_mask, "temperature_forecast"] = np.nan
+
+    rows = compute_data_drift(data, {"training_data_end": (data["observed_at"].max() - timedelta(days=3)).isoformat()})
+    temp_row = next(r for r in rows if r["feature_name"] == "temperature_forecast")
+    assert temp_row["details"]["insufficient_samples"] is True
+    assert temp_row["details"]["valid_samples"] < DRIFT_MIN_VALID_SAMPLES
+    assert temp_row["triggered"] is False  # even though blanking most of the window can inflate PSI
+
+
+def test_context_features_are_deduplicated_across_stations_before_counting() -> None:
+    data = _synthetic_data(days=20, stations=12)
+    rows = compute_data_drift(data, {"training_data_end": (data["observed_at"].max() - timedelta(days=3)).isoformat()})
+    temp_row = next(r for r in rows if r["feature_name"] == "temperature_forecast")
+    demand_row = next(r for r in rows if r["feature_name"] == "demand")
+    # 3 days * 96 periods = 288 unique timestamps, not 288*12 duplicated rows
+    assert temp_row["details"]["valid_samples"] <= 288
+    assert temp_row["details"]["valid_samples"] >= DRIFT_MIN_VALID_SAMPLES
+    # demand is genuinely per-station, so its count is much larger
+    assert demand_row["details"]["valid_samples"] > temp_row["details"]["valid_samples"]

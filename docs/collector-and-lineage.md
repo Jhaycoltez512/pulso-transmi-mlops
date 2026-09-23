@@ -212,6 +212,21 @@ tocar nada. Si lo hay:
    2.0 deja de dispararse por ese valor de fondo, pero sigue avisando si hay
    un salto real.
 
+   **Muestra mínima para confiar en el PSI de clima/eventos.** Como el
+   contexto va atrasado respecto a las observaciones (ver "Contexto" más
+   abajo), la ventana "reciente" de 3 días puede tener casi todo vacío. PSI
+   descarta los vacíos por diseño, así que en la práctica termina comparando
+   una muestra chica que se corre de un lado a otro en cada corrida —
+   confirmado en vivo el 23-sep: `temperature_forecast` pasó de 0.07 a 0.29
+   en un par de horas sin que el clima cambiara. Por eso `rain_forecast`,
+   `temperature_forecast` y `event_intensity` (una sola fila por instante,
+   repetida en las 12 estaciones por el merge, a diferencia de `demand` que sí
+   es por estación) necesitan al menos 150 timestamps únicos con dato real en
+   la ventana reciente — más o menos la mitad de una ventana completa de 3
+   días. Por debajo de eso, `triggered` queda forzado a `false` sin importar
+   qué tan alto salga el PSI, aunque el valor se sigue guardando (con
+   `details.insufficient_samples=true`) para que quede visible, no oculto.
+
 4. **Conservar o reentrenar**: el modelo entrenado (`.joblib`) se sube a un
    bucket privado de Supabase Storage (`models`) al reentrenar, y se descarga
    de ahí al conservar — así "conservar" evita reentrenar de verdad entre
