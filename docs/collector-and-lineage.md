@@ -33,8 +33,26 @@ artefactos en MLflow, configura un servidor persistente y agrega:
 
 ```dotenv
 MLFLOW_TRACKING_URI=https://<tu-servidor-mlflow>
+MLFLOW_TRACKING_USERNAME=<usuario>       # si el servidor pide autenticación
+MLFLOW_TRACKING_PASSWORD=<token>         # si el servidor pide autenticación
 MLFLOW_EXPERIMENT_NAME=pulso-transmi
 ```
+
+`MLFLOW_TRACKING_USERNAME`/`MLFLOW_TRACKING_PASSWORD` los lee el cliente de
+MLflow directamente (autenticación HTTP básica estándar); no hace falta
+tocar `scripts/mlflow_tracking.py` para usarlos.
+
+**Opción gratuita sin infraestructura propia: [DagsHub](https://dagshub.com).**
+Crea una cuenta (puede ser con GitHub) y un repositorio ahí — puede estar
+vacío, solo se usa como backend de MLflow. En la pestaña "Remote" →
+"Experiments" del repo aparece la URL (`https://dagshub.com/<usuario>/
+<repo>.mlflow`); en Settings → Tokens generas el valor para
+`MLFLOW_TRACKING_PASSWORD` (usa un token, no la contraseña de la cuenta).
+
+En GitHub Actions, agrega los tres como secrets del repositorio
+(`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`)
+— el workflow ya los pasa a ambos pasos del pipeline
+(`.github/workflows/collector.yml`).
 
 Después instala el extra:
 
