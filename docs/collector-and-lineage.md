@@ -152,6 +152,28 @@ El pipeline sigue cargando el modelo desde Supabase Storage para predecir
 (es lo que ya estaba probado): el Registry es el registro formal y visible,
 y si falla nunca bloquea el envío.
 
+**Versionado del dataset.** El mismo run que registra el modelo también
+versiona el snapshot exacto de datos con el que se entrenó, vía
+`scripts/mlflow_tracking.py:log_dataset()`. Queda de dos formas dentro del
+run, no en corridas separadas:
+
+- Como **MLflow Dataset** (`mlflow.data.from_pandas` + `mlflow.log_input`),
+  visible en la pestaña "Datasets" de DagsHub, enlazado al run que lo generó.
+  El `source` apunta al endpoint REST de Supabase del que salen las
+  observaciones (`SUPABASE_URL`); si esa variable no está configurada en el
+  entorno donde corre el reentrenamiento, MLflow usa como source la
+  ubicación del código que llamó a `from_pandas` — el Dataset igual queda
+  versionado, solo cambia la procedencia declarada.
+- Como **artifact parquet descargable** (`dataset/<data_version>.parquet`),
+  para poder recuperar el DataFrame completo tal cual, no solo su hash o
+  esquema — necesario para poder reentrenar o auditar una versión anterior
+  con los datos originales, no una aproximación.
+
+Igual que el Model Registry, esto es una copia de conveniencia: si el
+logging del dataset falla por cualquier razón, se imprime un aviso
+("MLflow dataset logging skipped: ...") pero el run y el reentrenamiento en
+sí nunca se bloquean por eso.
+
 ## Mecánica de los ciclos
 
 No está documentada en este SDK ni en la plantilla original — se confirmó a

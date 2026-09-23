@@ -9,7 +9,7 @@ mlflow = pytest.importorskip("mlflow")  # the mlops extra is optional; CI instal
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from catboost import CatBoostRegressor
-from mlflow_tracking import register_bundle
+from mlflow_tracking import log_run, register_bundle
 
 
 def test_bundle_is_registered_and_loadable_by_champion_alias(tmp_path: Path) -> None:
@@ -36,3 +36,34 @@ def test_bundle_is_registered_and_loadable_by_champion_alias(tmp_path: Path) -> 
     # with the weekly-naive column it blends 0.75 model + 0.25 naive, like production
     blended = loaded.predict(request.assign(weekly_naive=0.0))
     assert np.allclose(blended, 0.75 * raw)
+
+
+def test_log_run_versions_the_dataset_as_an_input_and_a_downloadable_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'mlflow.db'}")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "dataset-test")
+    frame = pd.DataFrame({"station_id": ["03000", "05000"] * 5, "demand": np.arange(10, dtype=float)})
+
+    run_id = log_run(
+        run_name="dataset-version-test",
+        tags={},
+        params={},
+        metrics={},
+        artifacts={},
+        dataset=frame,
+        dataset_name="training-snapshot-v1",
+    )
+
+    assert run_id is not None
+    run = mlflow.get_run(run_id)
+    dataset_inputs = run.inputs.dataset_inputs
+    assert len(dataset_inputs) == 1
+    assert dataset_inputs[0].dataset.name == "training-snapshot-v1"
+
+    client = mlflow.MlflowClient()
+    artifact_files = [f.path for f in client.list_artifacts(run_id, "dataset")]
+    assert artifact_files == ["dataset/training-snapshot-v1.parquet"]
+    local_path = client.download_artifacts(run_id, "dataset/training-snapshot-v1.parquet", str(tmp_path))
+    roundtrip = pd.read_parquet(local_path)
+    pd.testing.assert_frame_equal(roundtrip, frame)

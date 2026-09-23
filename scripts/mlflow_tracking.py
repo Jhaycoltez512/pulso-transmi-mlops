@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def log_run(
@@ -17,6 +20,8 @@ def log_run(
     artifact_paths: list[Path] | None = None,
     model_bundle: dict[str, Any] | None = None,
     registered_model_name: str | None = None,
+    dataset: "pd.DataFrame | None" = None,
+    dataset_name: str | None = None,
 ) -> str | None:
     """Log an experiment when a persistent MLflow tracking URI is configured.
 
@@ -47,7 +52,31 @@ def log_run(
                 register_bundle(mlflow, model_bundle, registered_model_name)
             except Exception as error:  # the registry is a convenience copy; never fail the run over it
                 print(f"MLflow model registry skipped: {error}")
+        if dataset is not None:
+            try:
+                log_dataset(mlflow, dataset, dataset_name or run_name)
+            except Exception as error:  # same: a convenience copy, never blocks the durable run
+                print(f"MLflow dataset logging skipped: {error}")
         return active_run.info.run_id
+
+
+def log_dataset(mlflow: Any, dataset: "pd.DataFrame", name: str) -> None:
+    """Log the exact training snapshot: as an MLflow Dataset (lineage, shows in DagsHub's
+    Datasets tab) and as a downloadable parquet artifact, so a past model version can be
+    reproduced or rolled back to with the data it was actually trained on, not just a hash."""
+    import tempfile
+
+    import mlflow.data
+    from mlflow.data.http_dataset_source import HTTPDatasetSource
+
+    supabase_url = os.getenv("SUPABASE_URL")
+    source = HTTPDatasetSource(url=f"{supabase_url}/rest/v1/observations") if supabase_url else None
+    tracked = mlflow.data.from_pandas(dataset, name=name, source=source)
+    mlflow.log_input(tracked, context="training")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / f"{name}.parquet"
+        dataset.to_parquet(path)
+        mlflow.log_artifact(str(path), artifact_path="dataset")
 
 
 def register_bundle(mlflow: Any, bundle: dict[str, Any], registered_model_name: str | None) -> None:

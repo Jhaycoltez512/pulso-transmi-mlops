@@ -54,7 +54,7 @@ def performance_thresholds(metrics: dict[str, Any], factor: float = 1.15) -> dic
 
 def record_lineage(
     data_cutoff: str, cycle_id: str, metrics: dict[str, Any], trigger_reason: str = "direct-multihorizon-training",
-    models: dict[int, CatBoostRegressor] | None = None,
+    models: dict[int, CatBoostRegressor] | None = None, data: pd.DataFrame | None = None,
 ) -> dict[str, Any] | None:
     """Link the model artifact, dataset version, metrics and optional MLflow run. Marks the new version active."""
     load_dotenv()
@@ -114,6 +114,7 @@ def record_lineage(
                     if models else None
                 ),
                 registered_model_name=REGISTERED_MODEL_NAME,
+                dataset=data, dataset_name=version,
             )
             if mlflow_id:
                 loader.patch("model_versions", model_version["id"], {"mlflow_run_id": mlflow_id})
@@ -257,7 +258,7 @@ def main() -> None:
         ARTIFACTS_DIR / "catboost_direct.joblib",
     )
     (ARTIFACTS_DIR / "catboost_direct_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    record_lineage(data_cutoff, cycle["cycle_id"] if cycle else "no-active-cycle", metrics, models=models)
+    record_lineage(data_cutoff, cycle["cycle_id"] if cycle else "no-active-cycle", metrics, models=models, data=data)
     print(f"Trained direct CatBoost models for horizons {horizons}.")
     for horizon in horizons:
         print(f"H={horizon} test accuracy: {metrics[str(horizon)]['test']['mean_station_accuracy']:.2f}")
