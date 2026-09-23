@@ -239,6 +239,16 @@ def main() -> None:
     loader = SupabaseLoader(url, key)
     forecast_run_id: str | None = None
     try:
+        # A still-open cycle gets checked again every 10 minutes; if it already has an
+        # accepted submission there's nothing new to do. Retraining and resubmitting anyway
+        # would reuse the same idempotency_key (cycle_id:model_version) with different
+        # content (a freshly retrained model), which the API correctly rejects with 409 --
+        # and it would burn through SUBMISSION_MAX_ATTEMPTS for no benefit.
+        accepted = loader.select("submissions", {"cycle_id": f"eq.{cycle['cycle_id']}", "status": "eq.accepted", "limit": 1})
+        if accepted:
+            print(f"Cycle {cycle['cycle_id']} already has an accepted submission ({accepted[0]['external_submission_id']}); nothing to do.")
+            return
+
         upsert_cycle(loader, cycle)
         data = add_origin_features(load_training_data())
         now = pd.Timestamp.now(tz="UTC")
