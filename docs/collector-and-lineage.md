@@ -53,6 +53,23 @@ registra `data_version`, commit, métricas por horizonte, artefacto Joblib y el
 entrena y versiona el modelo, pero no genera una submission hasta que la API
 publique objetivos nuevos.
 
+## Mecánica de los ciclos
+
+No está documentada en este SDK ni en la plantilla original — se confirmó a
+partir de la configuración del backend de la API (`.env.example` del servicio,
+valores oficiales):
+
+- `RELEASE_INTERVAL_MINUTES=30`: se libera un ciclo nuevo cada 30 minutos.
+- `SUBMISSION_WINDOW_MINUTES=25`: cada ciclo acepta submissions durante 25
+  minutos desde que abre (coincide con lo medido en el único ciclo real que
+  observamos: abrió y cerró con 25 minutos de diferencia).
+- `SUBMISSION_MAX_ATTEMPTS=3`: máximo 3 intentos válidos por ciclo.
+
+Con un ciclo cada 30 minutos y una ventana de 25, un cron **horario** se
+perdería sistemáticamente buena parte de los ciclos — por eso el schedule de
+GitHub Actions corre cada 30 minutos (`3,33 * * * *`), aceptando el jitter
+propio de GitHub con tal de no perder cobertura.
+
 ## Ciclo operativo: evaluar, decidir, predecir, enviar, registrar
 
 `scripts/run_forecast_cycle.py` corre después del collector, en el mismo job.
@@ -118,13 +135,16 @@ python scripts/run_forecast_cycle.py
 ## Automatización en GitHub Actions
 
 El workflow `.github/workflows/collector.yml` corre el collector y luego
-`run_forecast_cycle.py`, en ese orden, en el mismo job, al minuto 03 de cada
-hora. GitHub no garantiza disparos puntuales de `schedule` con frecuencia
-menor a una hora: en pruebas, un cron cada 15 minutos disparó una sola vez en
-más de dos horas, tanto en repositorio privado como público. Como ambos
-scripts son idempotentes (el collector no duplica filas; el orquestador crea
-un `forecast_run` nuevo por corrida y su decisión no depende de cuántas
-corridas hubo antes), una corrida horaria no pierde nada, solo acumula.
+`run_forecast_cycle.py`, en ese orden, en el mismo job, a los minutos 03 y 33
+de cada hora — para acompañar el ciclo de 30 minutos de la competencia (ver
+"Mecánica de los ciclos" arriba). GitHub no garantiza disparos puntuales de
+`schedule`: en pruebas, un cron cada 15 minutos disparó una sola vez en más de
+dos horas, tanto en repositorio privado como público, así que hay que esperar
+el mismo tipo de retraso aquí. Como ambos scripts son idempotentes (el
+collector no duplica filas; el orquestador crea un `forecast_run` nuevo por
+corrida y su decisión no depende de cuántas corridas hubo antes), una corrida
+tardía no pierde nada, solo puede perderse la ventana de submission de algún
+ciclo si el retraso es mayor a los ~5 minutos de margen entre ciclos.
 Configura estos secrets en GitHub:
 
 - `PULSO_API_KEY`

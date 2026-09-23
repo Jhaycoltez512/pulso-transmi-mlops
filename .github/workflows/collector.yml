@@ -3,7 +3,7 @@ name: pulso-stream-collector
 on:
   workflow_dispatch:
   schedule:
-    - cron: "3 * * * *"
+    - cron: "3,33 * * * *"
 
 permissions:
   contents: read
