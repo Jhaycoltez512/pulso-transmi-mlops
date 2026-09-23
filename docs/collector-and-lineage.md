@@ -122,15 +122,21 @@ tocar nada. Si lo hay:
       reciente de algún horizonte supera en 15% el WAPE de validación *del
       propio modelo activo* (ese umbral se calculó una vez al entrenarlo, no
       se recalcula en cada corrida).
-   4. `data_drift: {feature} PSI={x} > 0.25` — PSI de alguna variable supera
-      0.25 (umbral estándar de industria para "cambio significativo").
+   4. `data_drift: {feature} PSI={x} > {umbral}` — PSI de alguna variable
+      supera su umbral: 0.25 (estándar de industria para "cambio
+      significativo") para `demand`, `rain_forecast` y
+      `temperature_forecast`, y 2.0 para `event_intensity`.
    5. Si nada aplica: `stable: no trigger met` → se conserva el modelo.
 
-   `event_intensity` es una variable con eventos poco frecuentes; PSI puede
-   marcar drift con más frecuencia que las otras variables porque cualquier
-   ventana de 3 días sin eventos reales difiere bastante de una ventana de 14
-   días que sí tuvo alguno. No es un error — es la naturaleza de una señal
-   dispersa — pero conviene tenerlo presente al leer `trigger_reason`.
+   `event_intensity` tiene umbral propio porque es una variable dispersa
+   (eventos poco frecuentes): cualquier ventana de 3 días sin eventos
+   difiere mucho de una de 14 días que sí tuvo alguno. Con el umbral general
+   de 0.25, su PSI (entre 1.16 y 1.18 en las 18 mediciones registradas) disparaba un
+   reentreno en **todos** los ciclos: un modelo nuevo por ciclo, la opción
+   de "conservar" sin uso real, y ~10 MB más en Supabase Storage por ciclo.
+   A ese ritmo, el 1 GB del plan gratuito se llenaba en unos dos días. Con
+   2.0 deja de dispararse por ese valor de fondo, pero sigue avisando si hay
+   un salto real.
 
 4. **Conservar o reentrenar**: el modelo entrenado (`.joblib`) se sube a un
    bucket privado de Supabase Storage (`models`) al reentrenar, y se descarga

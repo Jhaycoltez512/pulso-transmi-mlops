@@ -5,7 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from run_forecast_cycle import BIAS_MIN_SAMPLES, bias_factor, bias_scale, decide_action, population_stability_index
+from run_forecast_cycle import BIAS_MIN_SAMPLES, bias_factor, bias_scale, compute_data_drift, decide_action, population_stability_index
 
 
 def test_psi_is_near_zero_for_identical_distributions() -> None:
@@ -94,3 +94,19 @@ def test_bias_scale_applies_half_the_correction_and_clips() -> None:
     assert abs(bias_scale(0.90) - 0.95) < 1e-9
     assert bias_scale(3.0) == 1.25
     assert bias_scale(0.1) == 0.8
+
+
+def test_event_intensity_uses_its_own_higher_drift_threshold() -> None:
+    rng = np.random.default_rng(0)
+    timestamps = pd.date_range("2026-01-01", periods=20 * 96, freq="15min", tz="UTC")
+    data = pd.DataFrame({
+        "observed_at": timestamps,
+        "demand": rng.normal(300, 50, len(timestamps)),
+        "rain_forecast": rng.random(len(timestamps)),
+        "temperature_forecast": rng.normal(18, 2, len(timestamps)),
+        "event_intensity": rng.random(len(timestamps)),
+    })
+    rows = compute_data_drift(data, {"training_data_end": timestamps[16 * 96].isoformat()})
+    thresholds = {row["feature_name"]: row["threshold"] for row in rows}
+    assert thresholds["event_intensity"] == 2.0
+    assert thresholds["demand"] == 0.25

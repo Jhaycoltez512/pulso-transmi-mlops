@@ -48,6 +48,10 @@ PERFORMANCE_WINDOW_DAYS = 3
 DRIFT_RECENT_WINDOW_DAYS = 3
 DRIFT_REFERENCE_WINDOW_DAYS = 14
 PSI_THRESHOLD = 0.25
+# event_intensity is sparse (rare events): any 3-day window without events differs a lot from a
+# 14-day one that had some, so its PSI sat at 1.16-1.18 in all 18 measurements and triggered a
+# retrain every single cycle. 2.0 still catches a real jump above that background level.
+PSI_THRESHOLD_OVERRIDES = {"event_intensity": 2.0}
 DRIFT_FEATURES = ["demand", "rain_forecast", "temperature_forecast", "event_intensity"]
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
@@ -158,9 +162,10 @@ def compute_data_drift(data: pd.DataFrame, active_model: dict[str, Any] | None) 
         if feature not in data.columns:
             continue
         psi = population_stability_index(reference[feature].to_numpy(dtype=float), recent[feature].to_numpy(dtype=float))
+        threshold = PSI_THRESHOLD_OVERRIDES.get(feature, PSI_THRESHOLD)
         rows.append({
             "feature_name": feature, "drift_type": "data", "method": "psi",
-            "value": psi, "threshold": PSI_THRESHOLD, "triggered": psi > PSI_THRESHOLD,
+            "value": psi, "threshold": threshold, "triggered": psi > threshold,
         })
     return rows
 
