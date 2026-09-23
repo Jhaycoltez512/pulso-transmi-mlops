@@ -47,7 +47,10 @@ def main() -> None:
         raise SystemExit("Configure SUPABASE_URL, SUPABASE_SECRET_KEY and PULSO_API_KEY.")
 
     loader = SupabaseLoader(database_url, database_key)
-    run: dict[str, Any] | None = None
+    # Created before the network call -- a timeout or connection error while fetching from the
+    # Pulso API must still leave a record, not vanish with an unhandled traceback (found live:
+    # httpx.ConnectTimeout crashed the run with no trace anywhere in ingestion_runs).
+    run = loader.insert("ingestion_runs", {"source_name": "pulso-transmi-stream", "git_commit": git_commit()})
     try:
         state = loader.select("sync_state", {"stream_name": "eq.observations", "limit": 1})
         last_released_at = state[0].get("last_released_at") if state else None
@@ -64,7 +67,7 @@ def main() -> None:
                     break
         fresh_rows = new_rows_since(rows, last_released_at)
         data_version = version_for(fresh_rows)
-        run = loader.insert("ingestion_runs", {"source_name": "pulso-transmi-stream", "git_commit": git_commit(), "data_version": data_version})
+        loader.patch("ingestion_runs", run["id"], {"data_version": data_version})
         latest_observed_at = max((row["observed_at"] for row in fresh_rows), default=(state[0].get("last_observed_at") if state else None))
         latest_released_at = max((released_marker(row) for row in fresh_rows), default=last_released_at)
         if fresh_rows:
@@ -80,9 +83,11 @@ def main() -> None:
             "last_observed_at": latest_observed_at, "observation_rows_read": len(fresh_rows),
         })
         print(f"Stream synchronized: {len(rows)} rows seen, {len(fresh_rows)} new rows upserted.")
-    except httpx.HTTPStatusError as error:
-        if run is not None:
-            loader.patch("ingestion_runs", run["id"], {"finished_at": datetime.now(timezone.utc).isoformat(), "status": "failed", "error_message": error.response.text})
+    except httpx.HTTPError as error:
+        # HTTPStatusError has a response body worth saving; connection/timeout errors (no
+        # response was ever received) fall back to the exception's own message.
+        detail = error.response.text if isinstance(error, httpx.HTTPStatusError) else str(error)
+        loader.patch("ingestion_runs", run["id"], {"finished_at": datetime.now(timezone.utc).isoformat(), "status": "failed", "error_message": detail})
         raise
     finally:
         loader.close()
