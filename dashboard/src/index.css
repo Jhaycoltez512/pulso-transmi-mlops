@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #0b1220;
+  color: #e2e8f0;
+}

@@ -60,7 +60,9 @@ contiene el trabajo de experimentación. Incluye:
   (persistido en Supabase Storage), predice los 4 horizontes para las 12
   estaciones y envía la submission por POST, registrando éxito o error de
   cada corrida;
-- generación y validación local de una vista previa de submission, sin enviarla.
+- generación y validación local de una vista previa de submission, sin enviarla;
+- dashboard opcional en `dashboard/` (Vite + React, desplegable en Vercel) —
+  ver [docs/dashboard.md](docs/dashboard.md).
 
 Consulta [la guía de Supabase](docs/supabase.md), [la guía de baselines](docs/ml-baselines.md)
 y [la guía del collector y lineage](docs/collector-and-lineage.md) para los
