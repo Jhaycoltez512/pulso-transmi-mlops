@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { supabase } from "../lib/supabase";
 import type { Prediction } from "../lib/types";
+import { Card } from "./Card";
+import { ErrorIcon } from "./icons";
+import { LiveBadge } from "./LiveBadge";
+import { Skeleton } from "./Skeleton";
 
 const REFRESH_MS = 60_000;
 const BIN_COUNT = 12;
 
-function buildHistogram(errors: number[]): { bucket: string; count: number }[] {
+function buildHistogram(errors: number[]): { bucket: string; count: number; mid: number }[] {
   if (errors.length === 0) return [];
   const min = Math.min(...errors);
   const max = Math.max(...errors);
@@ -16,12 +20,13 @@ function buildHistogram(errors: number[]): { bucket: string; count: number }[] {
     const index = Math.min(BIN_COUNT - 1, Math.floor((error - min) / width));
     bins[index].count += 1;
   }
-  return bins.map((bin) => ({ bucket: bin.start.toFixed(0), count: bin.count }));
+  return bins.map((bin) => ({ bucket: bin.start.toFixed(0), count: bin.count, mid: bin.start + width / 2 }));
 }
 
 export function ErrorDistribution() {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +40,7 @@ export function ErrorDistribution() {
       if (!cancelled) {
         setPredictions(data ?? []);
         setLoading(false);
+        setLastFetched(new Date());
       }
     }
     load();
@@ -50,13 +56,12 @@ export function ErrorDistribution() {
   const meanAbsError = errors.length ? errors.reduce((sum, e) => sum + Math.abs(e), 0) / errors.length : null;
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">Distribución de errores</h2>
-      <p className="mb-3 text-xs text-slate-500">
+    <Card title="Distribución de errores" icon={<ErrorIcon />} right={<LiveBadge lastUpdated={lastFetched} />}>
+      <p className="mb-3 -mt-2 text-xs text-slate-500">
         predicción − demanda real, sobre las {errors.length} predicciones ya evaluadas {meanAbsError !== null && `· error absoluto medio: ${meanAbsError.toFixed(1)}`}
       </p>
       {loading ? (
-        <p className="text-slate-500">Cargando…</p>
+        <Skeleton lines={5} />
       ) : histogram.length === 0 ? (
         <p className="text-slate-500">Todavía no hay predicciones evaluadas contra demanda real.</p>
       ) : (
@@ -65,12 +70,20 @@ export function ErrorDistribution() {
             <BarChart data={histogram}>
               <XAxis dataKey="bucket" stroke="#64748b" fontSize={11} />
               <YAxis stroke="#64748b" fontSize={12} allowDecimals={false} />
-              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #1e293b" }} />
-              <Bar dataKey="count" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+              <Tooltip
+                contentStyle={{ background: "#0f172a", border: "1px solid #1e293b" }}
+                labelFormatter={(label) => `error ≈ ${label}`}
+                formatter={(value) => [value, "predicciones"]}
+              />
+              <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+                {histogram.map((bin) => (
+                  <Cell key={bin.bucket} fill={bin.mid < 0 ? "#38bdf8" : bin.mid > 0 ? "#f59e0b" : "#94a3b8"} />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
       )}
-    </section>
+    </Card>
   );
 }

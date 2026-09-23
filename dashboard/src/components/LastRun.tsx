@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import type { ForecastRun, IngestionRun } from "../lib/types";
+import { Card } from "./Card";
+import { PulseIcon } from "./icons";
+import { LiveBadge } from "./LiveBadge";
+import { Skeleton } from "./Skeleton";
 
 const REFRESH_MS = 60_000;
 
@@ -14,6 +18,7 @@ export function LastRun() {
   const [forecastRun, setForecastRun] = useState<ForecastRun | null>(null);
   const [ingestionRun, setIngestionRun] = useState<IngestionRun | null>(null);
   const [loading, setLoading] = useState(true);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,6 +31,7 @@ export function LastRun() {
       setForecastRun(forecastRuns?.[0] ?? null);
       setIngestionRun(ingestionRuns?.[0] ?? null);
       setLoading(false);
+      setLastFetched(new Date());
     }
     load();
     const interval = setInterval(load, REFRESH_MS);
@@ -36,10 +42,9 @@ export function LastRun() {
   }, []);
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Última ejecución del pipeline</h2>
+    <Card title="Última ejecución del pipeline" icon={<PulseIcon />} right={<LiveBadge lastUpdated={lastFetched} />}>
       {loading ? (
-        <p className="text-slate-500">Cargando…</p>
+        <Skeleton lines={4} />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -70,6 +75,6 @@ export function LastRun() {
           </div>
         </div>
       )}
-    </section>
+    </Card>
   );
 }
