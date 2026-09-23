@@ -42,4 +42,5 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
           MLFLOW_EXPERIMENT_NAME: pulso-transmi
           PULSO_SUBMIT_ENABLED: ${{ vars.PULSO_SUBMIT_ENABLED }}
+          PULSO_BIAS_CORRECTION: ${{ vars.PULSO_BIAS_CORRECTION }}
         run: python scripts/run_forecast_cycle.py

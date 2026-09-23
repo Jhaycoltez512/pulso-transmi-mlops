@@ -167,6 +167,44 @@ dataset. Tras cuatro intentos (peso por estación, contexto climático, peso
 por recencia, features estacionales), el ensamble CatBoost + naive actual
 sigue siendo el mejor que tenemos con ~47 días de datos.
 
+### Adoptado: corrección de sesgo en línea
+
+Quinto experimento, y el primero que se adoptó
+(`scripts/backtest_bias_correction.py`). En vez de cambiar el modelo, se
+corrige su salida: en cada momento de predicción se mide el cociente demanda
+real / predicción de las predicciones de las últimas horas (solo las que ya
+tienen demanda real conocida en ese momento) y se escala la predicción
+siguiente. Se probaron 12 configuraciones sobre las mismas predicciones de
+producción: alcance por estación o global, ventana de 4/12/24 horas, y
+corrección al 50% o al 100%.
+
+| Horizonte | Producción | Global, 4h, 50% | Delta por fold |
+|---|---:|---:|---|
+| 15 min | 0.1294 | 0.1282 | −0.0021, −0.0003, −0.0012 |
+| 30 min | 0.1318 | 0.1305 | −0.0025, 0.0000, −0.0014 |
+| 45 min | 0.1341 | 0.1329 | −0.0022, +0.0001, −0.0013 |
+| 60 min | 0.1361 | 0.1348 | −0.0023, 0.0000, −0.0014 |
+
+Por qué se considera confiable, a pesar de ser una ganancia chica (~0.0012
+de WAPE, ~+0.12 puntos de accuracy):
+
+- **La misma configuración gana en los 4 horizontes**, cada uno evaluado por
+  separado. Con 12 configuraciones probadas, eso descarta que la ganadora
+  sea suerte de la búsqueda.
+- **Nunca empeora**: 9 de 12 combinaciones fold-horizonte mejoran y 3 quedan
+  empatadas (máximo +0.0001). En los experimentos anteriores la diferencia
+  cambiaba de signo entre folds.
+- **Las configuraciones vecinas también mejoran** (por estación a 4h, por
+  estación a 12h): es una zona estable, no un pico aislado.
+- **Es coherente con el drift encontrado**: ventana corta y corrección
+  parcial le ganan a las largas o agresivas, y la versión global le gana a
+  la por estación porque sumar las 12 estaciones reduce el ruido.
+
+Cómo funciona en producción: ver "Corrección de sesgo en línea" en
+`docs/collector-and-lineage.md`. Al adoptarla, el sesgo real medido sobre
+las últimas 4 horas era +6.7% (el modelo venía subestimando), lo que llevó
+a subir las predicciones un 3.4%.
+
 Resultados y modelo se guardan en `artifacts/catboost_direct_metrics.json` y
 `artifacts/catboost_direct.joblib`. Cada entrenamiento también registra
 lineage en Supabase (`model_versions`, `training_runs`, `model_metrics`) con

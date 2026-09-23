@@ -142,6 +142,24 @@ tocar nada. Si lo hay:
 5. **Predecir**: las 12 estaciones × horizontes que pida el ciclo (48 valores
    si pide los 4 horizontes), reusando `prediction_rows` de
    `train_catboost_direct.py`.
+
+   **Corrección de sesgo en línea**: antes de enviar, se mide cuánto se
+   equivocó el modelo en las últimas 4 horas, usando las predicciones ya
+   evaluadas contra demanda real de todas las estaciones y horizontes
+   (factor = demanda real / predicción). Todas las predicciones del ciclo se
+   multiplican por la mitad de esa corrección, limitada entre ×0.8 y ×1.25.
+   Por ejemplo, si el modelo viene subestimando un 6%, las predicciones
+   suben un 3%. Hacen falta al menos 48 predicciones evaluadas (un ciclo
+   completo); si no las hay, no se corrige. El factor se calcula siempre
+   sobre la **salida pura del modelo** (`predictions.raw_predicted_demand`),
+   no sobre el valor corregido que se envió (`predicted_demand`): así la
+   corrección no se acumula sobre sí misma, y la regla de `performance_drift`
+   sigue midiendo la calidad real del modelo sin que la corrección la
+   enmascare. Cada corrección queda registrada en `drift_measurements`
+   (`feature_name='prediction_bias'`, marcada como alerta si el sesgo supera
+   el 5%). Se validó con backtest walk-forward antes de adoptarla (ver
+   `docs/ml-baselines.md`). Para desactivarla sin tocar código:
+   `PULSO_BIAS_CORRECTION=false`.
 6. **Enviar**: valida el payload localmente (mismo `validate()` que usa la
    vista previa) y hace `POST /v1/submissions` con `Idempotency-Key:
    {cycle_id}:{model_version}` y la versión del modelo + commit de Git. El
@@ -187,6 +205,8 @@ Y estas variables (`vars`, no secrets):
 
 - `PULSO_API_URL`
 - `PULSO_SUBMIT_ENABLED` (opcional; `false` para desactivar el envío real)
+- `PULSO_BIAS_CORRECTION` (opcional; `false` para enviar la salida pura del
+  modelo, sin corrección de sesgo)
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.

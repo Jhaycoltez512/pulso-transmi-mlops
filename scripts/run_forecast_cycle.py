@@ -8,6 +8,10 @@ See docs/collector-and-lineage.md for the decision rule and its thresholds.
 
 Set PULSO_SUBMIT_ENABLED=false to run the full pipeline (evaluate, decide, predict,
 validate) without sending the real POST to the competition API.
+
+Before submitting, predictions get an online bias correction (validated in
+scripts/backtest_bias_correction.py): scaled by half of actual/predicted over the last 4h
+of evaluated predictions. Set PULSO_BIAS_CORRECTION=false to submit raw model output.
 """
 
 from __future__ import annotations
@@ -45,6 +49,36 @@ DRIFT_RECENT_WINDOW_DAYS = 3
 DRIFT_REFERENCE_WINDOW_DAYS = 14
 PSI_THRESHOLD = 0.25
 DRIFT_FEATURES = ["demand", "rain_forecast", "temperature_forecast", "event_intensity"]
+# Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
+# was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
+BIAS_WINDOW_HOURS = 4
+BIAS_ALPHA = 0.5
+BIAS_CLIP = (0.8, 1.25)
+BIAS_MIN_SAMPLES = 48  # one full cycle: 12 stations x 4 horizons
+BIAS_ALERT = 0.05  # |relative bias| worth flagging on the dashboard
+
+
+def bias_factor(rows: list[dict[str, Any]]) -> tuple[float | None, int]:
+    """actual / raw predicted demand over evaluated predictions, all stations and horizons pooled.
+
+    Uses the model's raw output, not the corrected value that was submitted: correcting on
+    top of a previous correction would compound. Rows from before the correction existed
+    have no raw value, but those were never corrected, so predicted_demand is the raw one.
+    """
+    usable = [row for row in rows if row.get("actual_demand") is not None]
+    if len(usable) < BIAS_MIN_SAMPLES:
+        return None, len(usable)
+    predicted = sum(row["raw_predicted_demand"] if row.get("raw_predicted_demand") is not None else row["predicted_demand"] for row in usable)
+    if predicted <= 0:
+        return None, len(usable)
+    return sum(row["actual_demand"] for row in usable) / predicted, len(usable)
+
+
+def bias_scale(factor: float | None) -> float:
+    if factor is None:
+        return 1.0
+    low, high = BIAS_CLIP
+    return float(min(high, max(low, 1 + BIAS_ALPHA * (factor - 1))))
 
 
 def population_stability_index(reference: np.ndarray, recent: np.ndarray, bins: int = 10) -> float:
@@ -86,14 +120,19 @@ def evaluate_recent_predictions(loader: SupabaseLoader, data: pd.DataFrame) -> N
 
 
 def recent_performance(loader: SupabaseLoader, horizons: list[int]) -> dict[int, dict[str, Any]]:
-    """WAPE per horizon from predictions evaluated within the last PERFORMANCE_WINDOW_DAYS."""
+    """WAPE per horizon from predictions evaluated within the last PERFORMANCE_WINDOW_DAYS.
+
+    Scores the raw model output, so the bias correction can't hide model degradation from
+    the retrain rule (the threshold it's compared to is the raw model's validation WAPE).
+    """
     since = (pd.Timestamp.now(tz="UTC") - timedelta(days=PERFORMANCE_WINDOW_DAYS)).isoformat()
     rows = loader.select("predictions", {
-        "evaluated_at": f"gte.{since}", "select": "station_id,horizon_minutes,predicted_demand,actual_demand",
+        "evaluated_at": f"gte.{since}", "select": "station_id,horizon_minutes,predicted_demand,raw_predicted_demand,actual_demand",
     })
     if not rows:
         return {}
     frame = pd.DataFrame(rows)
+    frame["predicted_demand"] = frame["raw_predicted_demand"].fillna(frame["predicted_demand"])
     result: dict[int, dict[str, Any]] = {}
     for horizon in horizons:
         subset = frame.loc[frame["horizon_minutes"] == horizon]
@@ -292,11 +331,32 @@ def main() -> None:
 
         predictions = prediction_rows(data, cycle, models)
 
+        cutoff = pd.Timestamp(cycle["data_cutoff"])
+        correction_enabled = os.environ.get("PULSO_BIAS_CORRECTION", "true").strip().lower() != "false"
+        recent = loader.select("predictions", {
+            "select": "predicted_demand,raw_predicted_demand,actual_demand", "actual_demand": "not.is.null",
+            "target_at": [f"gt.{(cutoff - timedelta(hours=BIAS_WINDOW_HOURS)).isoformat()}", f"lte.{cutoff.isoformat()}"],
+        })
+        factor, samples = bias_factor(recent)
+        scale = bias_scale(factor) if correction_enabled else 1.0
+        raw_values = {(p["station_id"], p["target_at"]): p["value"] for p in predictions}
+        for p in predictions:
+            p["value"] = float(p["value"] * scale)
+        print(f"Bias correction: factor={factor if factor is None else round(factor, 4)} samples={samples} scale={scale:.4f} enabled={correction_enabled}")
+        if ingestion_run_id and factor is not None:
+            loader.insert("drift_measurements", {
+                "ingestion_run_id": ingestion_run_id, "feature_name": "prediction_bias", "drift_type": "performance",
+                "method": f"relative_bias_{BIAS_WINDOW_HOURS}h", "value": factor - 1, "threshold": BIAS_ALERT,
+                "triggered": abs(factor - 1) > BIAS_ALERT,
+                "details": {"factor": factor, "applied_scale": scale, "samples": samples, "alpha": BIAS_ALPHA, "enabled": correction_enabled},
+            })
+
         horizon_lookup = target_horizons(cycle)
         loader.insert_many("predictions", [
             {
                 "forecast_run_id": forecast_run_id, "station_id": p["station_id"], "target_at": p["target_at"],
                 "horizon_minutes": horizon_lookup[(p["station_id"], p["target_at"])], "predicted_demand": p["value"],
+                "raw_predicted_demand": raw_values[(p["station_id"], p["target_at"])],
             }
             for p in predictions
         ])

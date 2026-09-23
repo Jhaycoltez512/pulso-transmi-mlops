@@ -5,7 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-from run_forecast_cycle import decide_action, population_stability_index
+from run_forecast_cycle import BIAS_MIN_SAMPLES, bias_factor, bias_scale, decide_action, population_stability_index
 
 
 def test_psi_is_near_zero_for_identical_distributions() -> None:
@@ -64,3 +64,33 @@ def test_decide_action_keeps_when_stable() -> None:
     action, reason = decide_action(active_model, performance, thresholds, drift_rows, now)
     assert action == "keep"
     assert "stable" in reason
+
+
+def test_bias_factor_uses_raw_predictions_not_the_corrected_ones() -> None:
+    # submitted (corrected) value 110, raw model output 100, actual 105 -> factor from raw: 1.05
+    rows = [{"actual_demand": 105, "predicted_demand": 110.0, "raw_predicted_demand": 100.0}] * BIAS_MIN_SAMPLES
+    factor, samples = bias_factor(rows)
+    assert samples == BIAS_MIN_SAMPLES
+    assert abs(factor - 1.05) < 1e-9
+
+
+def test_bias_factor_falls_back_to_predicted_for_rows_before_the_correction_existed() -> None:
+    rows = [{"actual_demand": 90, "predicted_demand": 100.0, "raw_predicted_demand": None}] * BIAS_MIN_SAMPLES
+    factor, _ = bias_factor(rows)
+    assert abs(factor - 0.9) < 1e-9
+
+
+def test_bias_factor_needs_enough_evaluated_samples() -> None:
+    rows = [{"actual_demand": 90, "predicted_demand": 100.0, "raw_predicted_demand": 100.0}] * (BIAS_MIN_SAMPLES - 1)
+    rows += [{"actual_demand": None, "predicted_demand": 100.0, "raw_predicted_demand": 100.0}] * 10
+    factor, samples = bias_factor(rows)
+    assert factor is None
+    assert samples == BIAS_MIN_SAMPLES - 1
+
+
+def test_bias_scale_applies_half_the_correction_and_clips() -> None:
+    assert bias_scale(None) == 1.0
+    assert abs(bias_scale(1.10) - 1.05) < 1e-9
+    assert abs(bias_scale(0.90) - 0.95) < 1e-9
+    assert bias_scale(3.0) == 1.25
+    assert bias_scale(0.1) == 0.8
