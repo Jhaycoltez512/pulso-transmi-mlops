@@ -29,7 +29,9 @@ def git_commit() -> str | None:
 
 
 def active_cycle() -> dict:
-    response = httpx.get(f"{PULSO_API_URL}/v1/forecast-cycles/current", timeout=30)
+    # Retry connection failures only; a transient ConnectTimeout would otherwise skip a cycle.
+    with httpx.Client(timeout=httpx.Timeout(30, connect=15), transport=httpx.HTTPTransport(retries=3)) as client:
+        response = client.get(f"{PULSO_API_URL}/v1/forecast-cycles/current")
     response.raise_for_status()
     return response.json()
 

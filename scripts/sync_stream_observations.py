@@ -56,7 +56,12 @@ def main() -> None:
         last_released_at = state[0].get("last_released_at") if state else None
         rows: list[dict[str, Any]] = []
         cursor = None
-        with httpx.Client(base_url=pulso_url, headers={"Authorization": f"Bearer {pulso_key}"}, timeout=60) as client:
+        # Retries only connection failures (the request never reached the API), with backoff:
+        # transient ConnectTimeouts to the Pulso API killed the whole job twice on 2026-09-23.
+        with httpx.Client(
+            base_url=pulso_url, headers={"Authorization": f"Bearer {pulso_key}"},
+            timeout=httpx.Timeout(60, connect=15), transport=httpx.HTTPTransport(retries=3),
+        ) as client:
             while True:
                 response = client.get("/v1/stream/observations", params={"limit": 5000, **({"cursor": cursor} if cursor else {})})
                 response.raise_for_status()
