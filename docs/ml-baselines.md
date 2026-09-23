@@ -143,6 +143,30 @@ necesita, sin ganar nada a cambio porque el drift es demasiado lento para que
 el modelo sigue como está, confiando en que `performance_drift` siga
 disparando reentrenos automáticos para compensar el corrimiento de a poco.
 
+Cuarto experimento, cambiando **lo que el modelo ve** en vez de cómo se
+pondera (`scripts/backtest_seasonal_features.py`): rezagos alineados al
+momento objetivo de 1, 2 y 3 semanas, su mediana y tendencia, y un ratio de
+"nivel" (demanda actual sobre su propio perfil multi-semana, promediado en
+la última hora y las últimas 4 horas). Resultado mixto pero concluyente:
+
+- Con **CatBoost solo**, las features ayudan, sobre todo en horizontes
+  largos (h60: 0.1310 vs 0.1368 en un fold), y eso con menos datos de
+  entrenamiento.
+- Pero **sustituyen** a la mezcla con el naive semanal en vez de sumarse: el
+  peso de mezcla óptimo de la variante resultó 1.0, es decir, sin naive.
+  Comparada con justicia (cada modelo con su propio peso óptimo, mismos
+  folds), la variante de 3 semanas quedó peor que producción en h15-h45
+  (+0.0011 a +0.0013 de WAPE, mismo signo en ambos folds) y empatada en h60
+  (el signo cambia entre folds). Lo más probable es que el warmup de 21 días
+  (~40% menos filas de entrenamiento con la historia actual) se coma la
+  ganancia.
+
+No se adoptó. Puede valer la pena repetirlo cuando haya más historia
+acumulada: el costo del warmup es fijo y pesa menos a medida que crece el
+dataset. Tras cuatro intentos (peso por estación, contexto climático, peso
+por recencia, features estacionales), el ensamble CatBoost + naive actual
+sigue siendo el mejor que tenemos con ~47 días de datos.
+
 Resultados y modelo se guardan en `artifacts/catboost_direct_metrics.json` y
 `artifacts/catboost_direct.joblib`. Cada entrenamiento también registra
 lineage en Supabase (`model_versions`, `training_runs`, `model_metrics`) con
