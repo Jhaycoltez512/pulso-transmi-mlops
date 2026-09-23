@@ -11,11 +11,30 @@ Cada ejecución queda registrada en `ingestion_runs` con:
 - `data_version`, un identificador reproducible construido con el último
   timestamp y el hash del bloque recibido;
 - commit del código;
-- `mlflow_run_id`, si MLflow está habilitado.
+- `mlflow_run_id`, solo si ese dato terminó usándose en un reentreno (ver
+  "MLflow" más abajo).
 
 El campo `released_at` de la API se guarda en `observations`, separado de
 `observed_at`: el primero indica cuándo la API liberó el dato y el segundo a qué
 momento corresponde la demanda.
+
+### Manejo de fallas de red
+
+- **Registro antes de llamar a la API.** La fila en `ingestion_runs` se crea
+  *antes* de consultar la API. Si la llamada falla (timeout, error de
+  conexión, error HTTP), queda con `status='failed'` y el error en
+  `error_message`. Antes se creaba después, y un `ConnectTimeout` real
+  (23-sep) tumbó la corrida sin dejar ningún registro.
+- **Reintentos.** Tanto esta llamada como la consulta de ciclo abierto
+  (`active_cycle()`) reintentan hasta 3 veces con espera exponencial, solo
+  cuando falla la *conexión*. En ese caso la petición nunca llegó al servidor,
+  así que reintentar es seguro. El límite para conectar es de 15 s, así que el
+  peor caso son ~1 minuto de reintentos. Se agregó tras dos `ConnectTimeout`
+  transitorios el 23-sep. Cuando el collector falla, GitHub Actions no corre
+  el paso de predicción de esa corrida. Un fallo pasajero ya no hace perder
+  el intento de envío del ciclo, y si la API está caída de verdad, la
+  siguiente corrida (10 min después) vuelve a intentar dentro de la misma
+  ventana de 25 minutos.
 
 ## Ejecución local
 
