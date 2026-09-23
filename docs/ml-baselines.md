@@ -120,6 +120,29 @@ forma consistente en los tres modelos del repositorio (naive, GBM y
 CatBoost), lo que apunta a menor predictibilidad de su demanda y no a un
 problema de escala o de variables faltantes.
 
+Un tercer experimento, más adelante en producción: el modelo activo mostró
+una caída lenta y sostenida de accuracy (~87.1% → ~86.9% a lo largo de
+~19 reentrenos y ~20 horas). Se investigó antes de tocar nada — demanda total
+en la ventana de prueba estable, PSI de las 4 variables monitoreadas sin
+cambios que coincidan con el inicio de la caída, y la comparación estación
+por estación entre el modelo temprano y el más reciente mostró empeoramiento
+repartido en 10 de 12 estaciones (ninguna dominante). Todo apunta a un
+corrimiento genuino y gradual en la relación entre variables y demanda
+(*concept drift*), consistente con lo que el README del reto advierte sobre
+cambios de patrón durante la competencia — no un bug del pipeline.
+
+Con eso confirmado, se probó **ponderar el entrenamiento por qué tan
+reciente es cada fila** (`scripts/backtest_recency_weight.py`, decaimiento
+exponencial con distintos half-life) para ver si ayudaba a adaptarse más
+rápido al corrimiento. No ayudó: con half-life de 30 días el resultado fue
+indistinguible de no ponderar, y con half-lives más cortos (14, 7, 3 días)
+empeoró de forma consistente en los cuatro horizontes — reducir el historial
+efectivo le quita al modelo la comparación semana-a-semana (`lag_672`) que
+necesita, sin ganar nada a cambio porque el drift es demasiado lento para que
+"lo más reciente" sea mejor maestro que el historial completo. Se descartó;
+el modelo sigue como está, confiando en que `performance_drift` siga
+disparando reentrenos automáticos para compensar el corrimiento de a poco.
+
 Resultados y modelo se guardan en `artifacts/catboost_direct_metrics.json` y
 `artifacts/catboost_direct.joblib`. Cada entrenamiento también registra
 lineage en Supabase (`model_versions`, `training_runs`, `model_metrics`) con
