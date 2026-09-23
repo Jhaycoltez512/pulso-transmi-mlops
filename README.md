@@ -51,7 +51,9 @@ contiene el trabajo de experimentación. Incluye:
   con un backtest walk-forward de varias ventanas para distinguir mejoras
   reales de ruido entre ventanas;
 - collector incremental con trazabilidad de datos y modelo en Supabase,
-  automatizado cada 10 minutos en GitHub Actions;
+  automatizado cada 10 minutos en GitHub Actions (disparado por un cron
+  externo, ver `docs/collector-and-lineage.md`, porque el `schedule` nativo
+  de GitHub no disparaba solo);
 - ciclo operativo automático (`run_forecast_cycle.py`): evalúa la exactitud
   reciente contra la demanda real ya liberada, mide drift de datos (PSI),
   decide con una regla explícita si conserva o reentrena el modelo

@@ -173,7 +173,8 @@ Configura estos secrets en GitHub:
 - `PULSO_API_KEY`
 - `SUPABASE_URL`
 - `SUPABASE_SECRET_KEY`
-- `MLFLOW_TRACKING_URI` (opcional; omítelo si se usa solo Supabase)
+- `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`
+  (opcionales; omítelos si se usa solo Supabase — ver sección MLflow arriba)
 
 Y estas variables (`vars`, no secrets):
 
@@ -182,3 +183,36 @@ Y estas variables (`vars`, no secrets):
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.
+
+## Disparador externo (cron-job.org)
+
+Incluso con `*/10 * * * *`, el `schedule` nativo de GitHub resultó no
+disparar solo: en pruebas reales de esta sesión, más de 6 ventanas de 10
+minutos pasaron en más de una hora sin ninguna corrida automática, con la
+configuración ya verificada como correcta (workflow `active`, repo público,
+YAML sin errores). Por eso el disparo real del pipeline hoy depende de un
+cron externo, no del `schedule:` del workflow (que se deja igual, como
+respaldo gratuito que no estorba si algún día empieza a disparar).
+
+**Mecanismo**: [cron-job.org](https://cron-job.org) (cuenta gratuita) hace un
+`POST` cada 10 minutos a la API de GitHub para invocar `workflow_dispatch`
+directamente, sin pasar por el scheduler interno de GitHub:
+
+| Campo | Valor |
+|---|---|
+| URL | `https://api.github.com/repos/Jhaycoltez512/pulso-transmi-mlops/actions/workflows/collector.yml/dispatches` |
+| Método | `POST` |
+| Headers | `Authorization: Bearer <token>`, `Accept: application/vnd.github+json`, `Content-Type: application/json` |
+| Body | `{"ref":"main"}` |
+| Frecuencia | cada 10 minutos |
+
+El `<token>` es un *fine-grained personal access token* de GitHub, con acceso
+limitado únicamente a este repositorio y permiso "Actions: Read and write"
+(mínimo privilegio) — se genera en
+`https://github.com/settings/personal-access-tokens/new`, tiene fecha de
+expiración obligatoria, y vive únicamente en la configuración del job de
+cron-job.org, no en este repositorio. **Hay que renovarlo antes de que
+expire**, o el disparador deja de funcionar sin ningún aviso — conviene
+poner un recordatorio en la misma fecha de expiración elegida al crearlo.
+Si el token se filtra, se revoca desde la misma página de GitHub sin afectar
+nada más del proyecto.
