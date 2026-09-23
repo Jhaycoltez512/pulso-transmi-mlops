@@ -92,16 +92,26 @@ def record_lineage(
                     "metric_name": "mean_station_wape", "metric_value": result[split]["mean_station_wape"],
                 }], "training_run_id,station_id,split_name,metric_name")
         flat_metrics = {f"h{h}_{split}_{metric}": values[split][metric] for h, values in metrics.items() for split in ("validation", "test") for metric in ("mean_station_accuracy", "mean_station_wape")}
+        # Data is versioned to MLflow here too, in the same run as the model -- not on every
+        # collector sync -- so DagsHub only gets a new artifact set when a retrain actually happens.
+        ingestion = ingestions[0] if ingestions else {}
+        data_manifest = {
+            "data_version": data_version, "cycle_id": cycle_id, "data_cutoff": data_cutoff,
+            "ingestion_run_id": ingestion.get("id"), "observation_rows_read": ingestion.get("observation_rows_read"),
+            "last_observed_at": ingestion.get("last_observed_at"), "ingestion_finished_at": ingestion.get("finished_at"),
+        }
         try:
             mlflow_id = log_run(
                 run_name=version, tags={"model": "catboost-direct", "data_version": data_version or "unknown", "git_commit": git_commit() or "unknown"},
                 params={"horizons": sorted(map(int, metrics)), "feature_count": len(FEATURES)}, metrics=flat_metrics,
-                artifacts={"metrics.json": metrics, "data_lineage.json": {"data_version": data_version, "cycle_id": cycle_id, "data_cutoff": data_cutoff}},
+                artifacts={"metrics.json": metrics, "data_manifest.json": data_manifest},
                 artifact_paths=[ARTIFACTS_DIR / "catboost_direct.joblib", ARTIFACTS_DIR / "catboost_direct_metrics.json"],
             )
             if mlflow_id:
                 loader.patch("model_versions", model_version["id"], {"mlflow_run_id": mlflow_id})
                 loader.patch("training_runs", training_run["id"], {"mlflow_run_id": mlflow_id})
+                if ingestion.get("id"):
+                    loader.patch("ingestion_runs", ingestion["id"], {"mlflow_run_id": mlflow_id})
         except Exception as error:
             print(f"MLflow model tracking skipped: {error}")
         print(f"Model lineage recorded: version={version}, data_version={data_version or 'unknown'}.")

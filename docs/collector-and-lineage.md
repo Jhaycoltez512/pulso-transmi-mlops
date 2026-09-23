@@ -60,16 +60,23 @@ Después instala el extra:
 python -m pip install -e '.[mlops]'
 ```
 
-Con esa URI, cada recolección registra parámetros, métricas y un manifiesto de
-datos en MLflow; el identificador del run queda enlazado con `ingestion_runs`.
-Si no existe una URI, el collector sigue funcionando y registra la trazabilidad
-en Supabase, pero no intenta usar un almacenamiento local efímero.
+`scripts/sync_stream_observations.py` (el collector) **no** loguea a MLflow —
+corre cada 10 minutos, y crear un run ahí en cada corrida ensuciaría el
+experimento con entradas casi siempre iguales. Supabase sigue siendo la
+trazabilidad durable de cada sincronización, con o sin MLflow configurado.
 
-`scripts/train_catboost_direct.py` sigue el mismo patrón para los modelos:
-registra `data_version`, commit, métricas por horizonte, artefacto Joblib y el
-`mlflow_run_id` en `model_versions` y `training_runs`. Si no hay ciclo abierto,
-entrena y versiona el modelo, pero no genera una submission hasta que la API
-publique objetivos nuevos.
+Los datos y el modelo se versionan juntos en MLflow **solo cuando el modelo
+se reentrena** — `record_lineage()` en `scripts/train_catboost_direct.py`,
+que `run_forecast_cycle.py` solo invoca cuando la regla de decisión (drift o
+desempeño) dice `retrain`. Ese único run de MLflow incluye: `data_version`
+como tag, un `data_manifest.json` (filas leídas, `last_observed_at`, y el
+`ingestion_run_id` exacto que produjo ese dato), métricas por horizonte,
+`metrics.json` y el artefacto Joblib del modelo. El mismo `mlflow_run_id`
+queda enlazado en Supabase en tres tablas a la vez: `model_versions`,
+`training_runs`, e `ingestion_runs` — así una sola corrida de MLflow
+representa "este dato + este modelo", trazable desde cualquiera de las tres.
+Si no hay ciclo abierto o la regla decide `keep`, no se genera ningún run
+nuevo de MLflow — el modelo activo simplemente se reutiliza.
 
 ## Mecánica de los ciclos
 

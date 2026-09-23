@@ -1,4 +1,11 @@
-"""Collect Pulso stream data with durable, idempotent lineage in Supabase."""
+"""Collect Pulso stream data with durable, idempotent lineage in Supabase.
+
+Runs every 10 minutes, so it does not log to MLflow itself -- that would create
+a noisy run per sync regardless of whether anything downstream changes. Data
+and model versions are logged together to MLflow only when a model actually
+retrains (see train_catboost_direct.record_lineage), driven by the drift/
+performance rule in run_forecast_cycle.py.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +18,6 @@ from typing import Any
 import httpx
 
 from load_supabase import SupabaseLoader, git_commit, load_dotenv
-from mlflow_tracking import log_run
 
 
 def released_marker(row: dict[str, Any]) -> str:
@@ -73,17 +79,6 @@ def main() -> None:
             "finished_at": datetime.now(timezone.utc).isoformat(), "status": "succeeded",
             "last_observed_at": latest_observed_at, "observation_rows_read": len(fresh_rows),
         })
-        try:
-            mlflow_run_id = log_run(
-                run_name="stream-collector", tags={"git_commit": git_commit() or "unknown", "data_version": data_version or "no-change"},
-                params={"source": "stream_observations", "api_rows_seen": len(rows), "new_rows": len(fresh_rows)},
-                metrics={"new_rows": float(len(fresh_rows))},
-                artifacts={"data_manifest.json": {"data_version": data_version, "last_observed_at": latest_observed_at, "last_released_at": latest_released_at, "new_rows": len(fresh_rows)}},
-            )
-            if mlflow_run_id:
-                loader.patch("ingestion_runs", run["id"], {"mlflow_run_id": mlflow_run_id})
-        except Exception as error:  # MLflow must not block the durable collector.
-            print(f"MLflow tracking skipped: {error}")
         print(f"Stream synchronized: {len(rows)} rows seen, {len(fresh_rows)} new rows upserted.")
     except httpx.HTTPStatusError as error:
         if run is not None:
