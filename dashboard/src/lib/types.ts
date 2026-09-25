@@ -53,6 +53,7 @@ export interface ModelVersion {
   training_data_end: string | null;
   git_commit: string | null;
   data_version: string | null;
+  mlflow_run_id: string | null;
 }
 
 export interface ModelMetric {
@@ -72,6 +73,7 @@ export interface DriftMeasurement {
   threshold: number | null;
   triggered: boolean;
   calculated_at: string;
+  details: { factor?: number; applied_scale?: number; samples?: number; enabled?: boolean } | null;
 }
 
 export interface LeaderboardRow {

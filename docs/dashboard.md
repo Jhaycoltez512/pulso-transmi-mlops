@@ -39,10 +39,10 @@ antes.
 | Sección | Fuente |
 |---|---|
 | Última ejecución del pipeline | `forecast_runs` + `ingestion_runs`, más recientes |
-| Versión activa del modelo | `model_versions` donde `is_active = true`, con sus métricas de `model_metrics` |
+| Versión activa del modelo | `model_versions` donde `is_active = true`, con sus métricas de `model_metrics`, el `data_version` del dataset con el que entrenó, y un link al run de MLflow (modelo + dataset versionados juntos, ver `docs/collector-and-lineage.md`) |
 | Mapa y serie por estación | `stations` (mapa fijo, 12 marcadores) + `observations` (últimos 7 días de la estación seleccionada) |
 | Distribución de errores | `predictions` con `actual_demand` ya evaluado |
-| Señales de drift | `drift_measurements`, la más reciente por variable |
+| Señales de drift | `drift_measurements`, la más reciente por variable. La corrección de sesgo en línea (`prediction_bias`) se muestra aparte, ya que no dispara reentrenamiento como el resto — solo corrige la predicción antes de enviarla |
 | Leaderboard (acumulado y rolling 24h) | `/api/leaderboard` → API de Pulso, resalta tu propia fila |
 
 Todo se refresca cada 60 segundos por polling simple (no hay suscripciones
@@ -71,6 +71,7 @@ npm run dev
    |---|---|---|
    | `VITE_SUPABASE_URL` | URL del proyecto de Supabase | pública (va al bundle) |
    | `VITE_SUPABASE_PUBLISHABLE_KEY` | clave publicable de Supabase | pública (va al bundle) |
+   | `VITE_MLFLOW_UI_URL` (opcional) | `https://dagshub.com/<usuario>/<repo>.mlflow/#/experiments/1` | pública (va al bundle) — sin token, es solo la URL del experimento en DagsHub. Si se omite, la tarjeta del modelo activo simplemente no muestra el link |
    | `PULSO_API_URL` | `https://pulso-transmi.72-60-245-2.sslip.io` | servidor únicamente |
    | `PULSO_API_KEY` | tu clave del portal de Pulso | servidor únicamente — **nunca** le pongas el prefijo `VITE_` |
 

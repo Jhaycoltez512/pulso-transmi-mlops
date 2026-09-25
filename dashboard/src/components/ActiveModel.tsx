@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import type { ModelMetric, ModelVersion } from "../lib/types";
 import { Card } from "./Card";
-import { ModelIcon } from "./icons";
+import { ExternalLinkIcon, ModelIcon } from "./icons";
 import { LiveBadge } from "./LiveBadge";
 import { Skeleton } from "./Skeleton";
 
 const REFRESH_MS = 60_000;
 const HORIZONS = [15, 30, 45, 60];
+const MLFLOW_UI_URL = import.meta.env.VITE_MLFLOW_UI_URL as string | undefined;
 
 function AccuracyBar({ value }: { value: number }) {
   const color = value >= 85 ? "bg-emerald-500" : value >= 70 ? "bg-amber-500" : "bg-red-500";
@@ -63,6 +64,21 @@ export function ActiveModel() {
             entrenado {model.trained_at ? new Date(model.trained_at).toLocaleString() : "—"} · commit{" "}
             <span className="font-mono">{model.git_commit?.slice(0, 8) ?? "—"}</span>
           </p>
+          {model.data_version && (
+            <p className="truncate text-slate-500" title={model.data_version}>
+              dataset <span className="font-mono text-slate-400">{model.data_version}</span>
+            </p>
+          )}
+          {model.mlflow_run_id && MLFLOW_UI_URL && (
+            <a
+              href={`${MLFLOW_UI_URL}/runs/${model.mlflow_run_id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-sky-400 transition-colors hover:text-sky-300"
+            >
+              Ver modelo y dataset en MLflow <ExternalLinkIcon className="h-3 w-3" />
+            </a>
+          )}
           {metrics.length > 0 && (
             <div className="mt-3 space-y-2">
               {HORIZONS.map((horizon) => {
