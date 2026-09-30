@@ -43,6 +43,7 @@ antes.
 | Mapa y serie por estación | `stations` (mapa fijo, 12 marcadores) + `observations` (últimos 7 días de la estación seleccionada) |
 | Distribución de errores | `predictions` con `actual_demand` ya evaluado |
 | Señales de drift | `drift_measurements`, la más reciente por variable. La corrección de sesgo en línea (`prediction_bias`) se muestra aparte, ya que no dispara reentrenamiento como el resto — solo corrige la predicción antes de enviarla |
+| Drift por estación | `drift_measurements` con `feature_name` `station_level:*`, la más reciente por estación: cambio de la relación "últimas 24 h vs misma franja de la semana anterior" desde que se entrenó el modelo activo, en escala logarítmica, con las marcas de ×0.67 y ×1.5 que disparan reentreno |
 | Leaderboard (acumulado y rolling 24h) | `/api/leaderboard` → API de Pulso, resalta tu propia fila |
 
 Todo se refresca cada 60 segundos por polling simple (no hay suscripciones

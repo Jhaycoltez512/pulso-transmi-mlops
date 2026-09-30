@@ -72,6 +72,17 @@ DRIFT_FEATURES = ["demand", "rain_forecast", "temperature_forecast", "event_inte
 # stations by the merge in load_training_data() -- dedupe those before counting/scoring so 12
 # copies of the same stale value don't look like a healthy sample.
 PER_TIMESTAMP_FEATURES = {"rain_forecast", "temperature_forecast", "event_intensity"}
+# Per-station level drift. PSI on `demand` pools all 12 stations, so when the competition moved
+# riders between stations (05100 down to 0.2x of the previous week, 05000/02300 up 2-3x) the
+# pooled distribution barely changed (PSI 0.01-0.04) and no data-drift alarm ever fired. This
+# compares each station's last 24h against the same 24h a week earlier, now vs. at the active
+# model's training_data_end: the change in that week-over-week ratio is what the model hasn't
+# seen yet. After a retrain the reference moves to the new cutoff, so a persistent change fires
+# once, not every cycle. On the real data, x1.5 clears the natural variation of stable stations
+# (up to x1.45 within 12h) and catches 05100, 05000, 02300 and 03000.
+STATION_DRIFT_WINDOW = timedelta(hours=24)
+STATION_DRIFT_THRESHOLD = float(np.log(1.5))
+STATION_DRIFT_PREFIX = "station_level:"
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
 BIAS_WINDOW_HOURS = 4
@@ -212,6 +223,46 @@ def compute_data_drift(data: pd.DataFrame, active_model: dict[str, Any] | None) 
     return rows
 
 
+def week_log_ratios(data: pd.DataFrame, end: pd.Timestamp) -> dict[str, float]:
+    """ln(demand in the 24h up to `end` / demand in the same 24h a week earlier), per station.
+
+    Stations missing any period in either window are left out rather than scored on a gap.
+    """
+    periods = int(STATION_DRIFT_WINDOW / timedelta(minutes=15))
+    recent = data.loc[(data["observed_at"] > end - STATION_DRIFT_WINDOW) & (data["observed_at"] <= end)]
+    week_end = end - timedelta(days=7)
+    before = data.loc[(data["observed_at"] > week_end - STATION_DRIFT_WINDOW) & (data["observed_at"] <= week_end)]
+    result = {}
+    for station, now_rows in recent.groupby("station_id"):
+        then_rows = before.loc[before["station_id"] == station]
+        if len(now_rows) < periods or len(then_rows) < periods:
+            continue
+        now_sum, then_sum = float(now_rows["demand"].sum()), float(then_rows["demand"].sum())
+        if now_sum > 0 and then_sum > 0:
+            result[str(station)] = float(np.log(now_sum / then_sum))
+    return result
+
+
+def compute_station_drift(data: pd.DataFrame, active_model: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """One row per station: |change in week-over-week log ratio| since the active model's training cutoff."""
+    if active_model is None or not active_model.get("training_data_end"):
+        return []
+    at_training = week_log_ratios(data, pd.Timestamp(active_model["training_data_end"]))
+    now = week_log_ratios(data, data["observed_at"].max())
+    rows = []
+    for station in sorted(set(at_training) & set(now)):
+        change = now[station] - at_training[station]
+        rows.append({
+            "feature_name": f"{STATION_DRIFT_PREFIX}{station}", "drift_type": "data", "method": "week_ratio_shift_24h",
+            "value": abs(change), "threshold": STATION_DRIFT_THRESHOLD, "triggered": abs(change) > STATION_DRIFT_THRESHOLD,
+            "details": {
+                "station_id": station, "ratio_now": float(np.exp(now[station])),
+                "ratio_at_training": float(np.exp(at_training[station])), "relative_change": float(np.exp(change)),
+            },
+        })
+    return rows
+
+
 def decide_action(
     active_model: dict[str, Any] | None,
     performance: dict[int, dict[str, Any]],
@@ -231,6 +282,10 @@ def decide_action(
             return "retrain", f"performance_drift: h{horizon} recent WAPE {result['wape']:.4f} > threshold {threshold:.4f}"
     for row in drift_rows:
         if row["triggered"]:
+            if row["feature_name"].startswith(STATION_DRIFT_PREFIX):
+                change = (row.get("details") or {}).get("relative_change")
+                detail = f"x{change:.2f} vs training" if change is not None else f"{row['value']:.4f}"
+                return "retrain", f"data_drift: {row['feature_name']} {detail} > x{np.exp(row['threshold']):.2f}"
             return "retrain", f"data_drift: {row['feature_name']} PSI={row['value']:.4f} > {row['threshold']}"
     return "keep", "stable: no trigger met"
 
@@ -381,7 +436,7 @@ def main() -> None:
         active_model = fetch_active_model(loader)
         horizons = sorted({int(target["horizon_minutes"]) for target in cycle["targets"]})
         performance = recent_performance(loader, horizons, (active_model or {}).get("id"))
-        drift_rows = compute_data_drift(data, active_model)
+        drift_rows = compute_data_drift(data, active_model) + compute_station_drift(data, active_model)
 
         ingestions = loader.select("ingestion_runs", LATEST_OBSERVATIONS_INGESTION)
         ingestion_run_id = ingestions[0]["id"] if ingestions else None

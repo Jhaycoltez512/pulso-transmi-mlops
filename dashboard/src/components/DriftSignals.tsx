@@ -16,7 +16,13 @@ export function DriftSignals() {
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const { data } = await supabase.from("drift_measurements").select("*").order("calculated_at", { ascending: false }).limit(20);
+      // Per-station rows have their own card (StationDrift); leave them out so they don't crowd this one.
+      const { data } = await supabase
+        .from("drift_measurements")
+        .select("*")
+        .not("feature_name", "like", "station_level:%")
+        .order("calculated_at", { ascending: false })
+        .limit(20);
       if (!cancelled) {
         setRows(data ?? []);
         setLoading(false);

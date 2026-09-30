@@ -180,3 +180,47 @@ def test_recent_performance_only_scores_the_active_models_predictions() -> None:
     assert params["forecast_runs.model_version_id"] == "eq.model-123"
     assert "forecast_runs!inner(model_version_id)" in params["select"]
     assert "forecast_runs.model_version_id" not in recent_performance_params("2026-09-30T00:00:00+00:00", None)
+
+
+def _station_frame(days: int = 16, stations: tuple[str, ...] = ("05000", "05100")) -> pd.DataFrame:
+    timestamps = pd.date_range("2026-09-01", periods=days * 96, freq="15min", tz="UTC")
+    rng = np.random.default_rng(3)
+    return pd.concat([
+        pd.DataFrame({"station_id": s, "observed_at": timestamps, "demand": 300 + rng.normal(0, 15, len(timestamps))})
+        for s in stations
+    ], ignore_index=True)
+
+
+def test_station_drift_fires_only_for_the_station_that_changed() -> None:
+    from run_forecast_cycle import compute_station_drift
+
+    data = _station_frame()
+    end = data["observed_at"].max()
+    trained = end - timedelta(days=2)
+    data.loc[(data["station_id"] == "05100") & (data["observed_at"] > trained), "demand"] *= 0.4
+    rows = {row["details"]["station_id"]: row for row in compute_station_drift(data, {"training_data_end": trained.isoformat()})}
+    assert rows["05100"]["triggered"] is True
+    assert 0.35 < rows["05100"]["details"]["relative_change"] < 0.45
+    assert rows["05000"]["triggered"] is False
+
+
+def test_station_drift_does_not_refire_after_retraining_on_the_new_level() -> None:
+    from run_forecast_cycle import compute_station_drift
+
+    data = _station_frame()
+    end = data["observed_at"].max()
+    data.loc[(data["station_id"] == "05100") & (data["observed_at"] > end - timedelta(days=2)), "demand"] *= 0.4
+    # a model retrained at the current cutoff already saw the new level: nothing new to react to
+    rows = compute_station_drift(data, {"training_data_end": end.isoformat()})
+    assert rows and not any(row["triggered"] for row in rows)
+
+
+def test_decide_action_names_the_station_on_station_drift() -> None:
+    now = pd.Timestamp.now(tz="UTC")
+    drift_rows = [{
+        "feature_name": "station_level:05100", "value": 0.9, "threshold": float(np.log(1.5)), "triggered": True,
+        "details": {"relative_change": 0.41},
+    }]
+    action, reason = decide_action({"trained_at": now.isoformat()}, {}, {}, drift_rows, now)
+    assert action == "retrain"
+    assert reason == "data_drift: station_level:05100 x0.41 vs training > x1.50"

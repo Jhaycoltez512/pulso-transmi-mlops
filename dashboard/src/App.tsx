@@ -6,6 +6,7 @@ import { ErrorDistribution } from "./components/ErrorDistribution";
 import { MapIcon } from "./components/icons";
 import { LastRun } from "./components/LastRun";
 import { Leaderboard } from "./components/Leaderboard";
+import { StationDrift } from "./components/StationDrift";
 import { StationMap } from "./components/StationMap";
 import { StationSeries } from "./components/StationSeries";
 import { supabase } from "./lib/supabase";
@@ -67,6 +68,8 @@ export default function App() {
           <ErrorDistribution />
           <DriftSignals />
         </div>
+
+        <StationDrift stations={stations} />
 
         <Leaderboard />
       </main>

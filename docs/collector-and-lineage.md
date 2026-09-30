@@ -235,7 +235,32 @@ tocar nada. Si lo hay:
       supera su umbral: 0.25 (estándar de industria para "cambio
       significativo") para `demand`, `rain_forecast` y
       `temperature_forecast`, y 2.0 para `event_intensity`.
-   5. Si nada aplica: `stable: no trigger met` → se conserva el modelo.
+   5. `data_drift: station_level:{estación} x{cambio} vs training > x1.50` —
+      drift por estación (ver abajo).
+   6. Si nada aplica: `stable: no trigger met` → se conserva el modelo.
+
+   **Drift por estación.** El PSI de `demand` junta las 12 estaciones. Cuando
+   la competencia movió pasajeros entre estaciones (desde el 13-sep: 05100
+   bajó a ×0.18 de la semana anterior, 05000 y 02300 subieron ×2.5–3.2, 03000
+   bajó a ×0.41), el PSI se quedó en 0.01–0.04 y nunca avisó, porque las
+   subidas y bajadas se compensan. Por eso se añadió un indicador por
+   estación:
+
+   - `ratio` = demanda de la estación en las últimas 24 h ÷ la de las mismas
+     24 h de la semana anterior (compara igual hora y día de la semana).
+   - El valor medido es cuánto cambió ese `ratio` desde el `training_data_end`
+     del modelo activo: `|ln(ratio_ahora / ratio_al_entrenar)|`.
+   - Umbral ×1.5 (`ln 1.5 ≈ 0.405`). En los datos reales, las estaciones
+     estables variaron como máximo ×1.45 en 12 h, y 05100, 05000, 02300 y
+     03000 lo superaron (×1.6–×1.9).
+   - Como la referencia es el corte del modelo activo, un cambio que
+     persiste dispara **un** reentreno. Después la referencia pasa al nuevo
+     corte y no vuelve a disparar hasta que la estación cambie otra vez.
+
+   Se guarda una fila por estación en `drift_measurements`
+   (`feature_name='station_level:<id>'`, `method='week_ratio_shift_24h'`,
+   con `ratio_now`, `ratio_at_training` y `relative_change` en `details`), y
+   el dashboard la muestra en la tarjeta "Drift por estación".
 
    `event_intensity` tiene umbral propio porque es una variable dispersa
    (eventos poco frecuentes): cualquier ventana de 3 días sin eventos
