@@ -39,30 +39,64 @@ En Windows PowerShell, la activación es `.venv\Scripts\Activate.ps1`.
 
 ## Implementación del equipo
 
-La rama [`develop/ml`](https://github.com/Jhaycoltez512/pulso-transmi-mlops/tree/develop/ml)
-contiene el trabajo de experimentación. Incluye:
+La rama `main` contiene el pipeline en operación.
 
-- esquema y carga inicial en Supabase;
-- EDA reproducible en `analysis/eda.py` y resultados en `eda_results/`;
-- baseline de `HistGradientBoostingRegressor` con retardos diario y semanal;
-- baseline naive semanal (demanda de la misma estación siete días antes);
-- CatBoost multi-horizonte directo con rezagos y medias móviles, ensamblado
-  con el baseline naive semanal; el modelo y el peso de mezcla se validaron
-  con un backtest walk-forward de varias ventanas para distinguir mejoras
-  reales de ruido entre ventanas;
-- collector incremental con trazabilidad de datos y modelo en Supabase,
-  automatizado cada 10 minutos en GitHub Actions (disparado por un cron
-  externo, ver `docs/collector-and-lineage.md`, porque el `schedule` nativo
-  de GitHub no disparaba solo);
-- ciclo operativo automático (`run_forecast_cycle.py`): evalúa la exactitud
-  reciente contra la demanda real ya liberada, mide drift de datos (PSI),
-  decide con una regla explícita si conserva o reentrena el modelo
-  (persistido en Supabase Storage), predice los 4 horizontes para las 12
-  estaciones y envía la submission por POST, registrando éxito o error de
-  cada corrida;
-- generación y validación local de una vista previa de submission, sin enviarla;
-- dashboard opcional en `dashboard/` (Vite + React, desplegable en Vercel) —
-  ver [docs/dashboard.md](docs/dashboard.md).
+**Datos y trazabilidad**
+
+- Esquema y carga inicial en Supabase.
+- EDA reproducible en `analysis/eda.py`, con resultados en `eda_results/`.
+- Collector incremental cada 10 minutos en GitHub Actions. Lo dispara un cron
+  externo porque el `schedule` nativo de GitHub no disparaba solo; ver
+  [docs/collector-and-lineage.md](docs/collector-and-lineage.md).
+- Cada reentreno versiona juntos datos y modelo en Supabase y en MLflow
+  (Model Registry con alias `champion` y dataset versionado).
+
+**Modelo en producción**
+
+- CatBoost multi-horizonte directo: un modelo por horizonte (15, 30, 45 y 60 min).
+- Demanda y objetivo **normalizados por el nivel reciente de cada estación**
+  (media de las últimas 4 h). Si una estación sube o baja de golpe, el modelo
+  sigue funcionando sin salirse de su rango.
+- **Solo memoria corta**: demanda actual, rezagos de hasta 2 h y medias
+  móviles de 1 h y 3 h, más calendario y estación.
+- Se entrena con toda la historia disponible. Las métricas y umbrales de
+  alerta salen de las ventanas de validación y prueba.
+
+Reemplazó al ensamble CatBoost + naive semanal cuando la competencia empezó a
+mover demanda entre estaciones (desde el 13-sep simulado: 05100 cayó a ×0.18,
+05000 y 02300 subieron ×2.5–3.2). En un backtest con esos datos reales pasa
+de 74–78% a 84–88% de accuracy según el horizonte. El detalle y los
+experimentos descartados están en [docs/ml-baselines.md](docs/ml-baselines.md).
+
+Como referencia se conservan dos baselines: `HistGradientBoostingRegressor`
+con retardos diario y semanal, y el naive semanal (demanda de la misma
+estación siete días antes).
+
+**Ciclo operativo** (`scripts/run_forecast_cycle.py`)
+
+En cada ciclo abierto:
+
+1. Evalúa las predicciones pasadas del modelo activo contra la demanda real.
+2. Mide drift:
+   - PSI de demanda y contexto;
+   - **drift por estación**: cambio de la relación "últimas 24 h ÷ mismas 24 h
+     de la semana anterior" desde que se entrenó el modelo.
+3. Decide con una regla explícita si conserva o reentrena. Reentrena por
+   antigüedad, por error sobre el umbral o por drift; el motivo queda
+   registrado.
+4. Predice los 4 horizontes de las 12 estaciones y envía la submission.
+5. Registra éxito o error de cada paso.
+
+Los modelos se guardan en Supabase Storage con poda automática.
+
+**Dashboard y herramientas**
+
+- Dashboard en `dashboard/` (Vite + React, en Vercel): estado del pipeline,
+  modelo activo, errores, drift por estación y leaderboard; ver
+  [docs/dashboard.md](docs/dashboard.md).
+- Backtests walk-forward, entre ellos `scripts/backtest_production_shift.py`
+  sobre el periodo real de cambios.
+- Vista previa y validación local de la submission, sin enviarla.
 
 Consulta [la guía de Supabase](docs/supabase.md), [la guía de baselines](docs/ml-baselines.md)
 y [la guía del collector y lineage](docs/collector-and-lineage.md) para los
