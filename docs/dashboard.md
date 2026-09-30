@@ -40,9 +40,10 @@ antes.
 |---|---|
 | Última ejecución del pipeline | `forecast_runs` + `ingestion_runs`, más recientes |
 | Versión activa del modelo | `model_versions` donde `is_active = true`, con sus métricas de `model_metrics`, el `data_version` del dataset con el que entrenó, y un link al run de MLflow (modelo + dataset versionados juntos, ver `docs/collector-and-lineage.md`) |
-| Mapa y serie por estación | `stations` (mapa fijo, 12 marcadores) + `observations` (últimos 7 días de la estación seleccionada) |
+| Mapa y serie por estación | `stations` (mapa fijo, 12 marcadores) + `observations` (últimos 7 días de datos de la estación seleccionada, contados desde su última observación: el reto corre en tiempo simulado) |
 | Distribución de errores | `predictions` con `actual_demand` ya evaluado |
 | Señales de drift | `drift_measurements`, la más reciente por variable. La corrección de sesgo en línea (`prediction_bias`) se muestra aparte, ya que no dispara reentrenamiento como el resto — solo corrige la predicción antes de enviarla |
+| Predicción vs demanda real | `observations` y `predictions` de la estación elegida, últimas 48 h de datos: demanda real (línea) contra la predicción enviada (puntos) para el horizonte elegido (15/30/45/60 min), con la accuracy de esos puntos y una tabla con el error de cada predicción |
 | Drift por estación | `drift_measurements` con `feature_name` `station_level:*`, la más reciente por estación: cambio de la relación "últimas 24 h vs misma franja de la semana anterior" desde que se entrenó el modelo activo, en escala logarítmica, con las marcas de ×0.67 y ×1.5 que disparan reentreno |
 | Leaderboard (acumulado y rolling 24h) | `/api/leaderboard` → API de Pulso, resalta tu propia fila |
 
