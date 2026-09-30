@@ -35,24 +35,28 @@ DEMAND_FEATURES = ["current_demand", *[f"lag_{lag}" for lag in LAGS], *[f"rollin
 RAW_FEATURES = ["station_id", *CALENDAR_FEATURES, *DEMAND_FEATURES]
 # Level-normalised model (adopted 2026-09-30). Every demand feature and the target are divided
 # by the station's mean demand over the last LEVEL_WINDOW periods, and the prediction is
-# multiplied back. A tree model can't extrapolate: when the competition shifted demand ~35%
-# up, the raw-units model kept predicting inside its old range (recent WAPE 0.26-0.28 against
-# a 0.13 validation, bias factor 1.3-1.4). Ratios are unchanged by a level shift, so the same
-# model keeps working. Validated offline on real data with an injected shift (see
-# docs/ml-baselines.md): same WAPE as the raw model when stable, ~0.12-0.14 instead of
-# ~0.15-0.17 (bias-corrected) or ~0.19-0.22 (uncorrected) under the shift.
+# multiplied back. A tree model can't extrapolate: when the competition moved demand between
+# stations (some x2-3, others down to x0.2), the raw-units model kept predicting inside each
+# station's old range. Ratios are unchanged by a level change, so the same model keeps working.
 LEVEL_WINDOW = 16  # 4 hours; 1 hour was noisier at h60
-FEATURES = ["station_id", *CALENDAR_FEATURES, *[f"norm_{feature}" for feature in DEMAND_FEATURES]]
-MODEL_FORMAT = "level-ratio-v1"
+# Only the last hour of history goes into the model. Replaying the real mid-September station
+# changes (scripts/backtest_production_shift.py: 05100 falling to ~0.2x of the previous week,
+# 05000/02300 up 2-3x, 03000 ~0.4x) showed that day/week lags -- and the weekly-naive blend --
+# anchor each station to a pattern that no longer holds. Short memory won at every horizon:
+# 87.6/86.6/85.3/84.1% (h15-h60) vs 77.9/76.7/75.6/74.1% for the previous production setup.
+MODEL_DEMAND_FEATURES = ["current_demand", "lag_1", "lag_2", "lag_4", "lag_8", "rolling_mean_4", "rolling_mean_12"]
+FEATURES = ["station_id", *CALENDAR_FEATURES, *[f"norm_{feature}" for feature in MODEL_DEMAND_FEATURES]]
+MODEL_FORMAT = "level-ratio-v2"
 WEEKLY_NAIVE_LAG = timedelta(days=7)
 WEEK_PERIODS = 672
 # The weekly naive is rescaled by how the last LEVEL_WINDOW periods compare with the same
 # periods a week earlier, so it follows a level shift too instead of anchoring on last week.
 WEEK_RATIO_CLIP = (0.5, 2.0)
-# Share given to the CatBoost prediction vs. the weekly seasonal-naive prediction. Picked with
-# scripts/backtest_ensemble.py: a walk-forward sweep found 0.70-0.85 near-optimal at every horizon,
-# with WAPE gains over pure CatBoost well above the noise between folds (see docs/ml-baselines.md).
-ENSEMBLE_WEIGHT = 0.75
+# Share given to the CatBoost prediction vs. the (level-adjusted) weekly naive. 0.75 was picked
+# with scripts/backtest_ensemble.py on the stable initial data; on the real post-change period
+# any naive share made things worse (last week's pattern is exactly what changed), so the blend
+# is off: 1.0 = CatBoost alone. blend_predictions still works for other weights.
+ENSEMBLE_WEIGHT = 1.0
 # MLflow Model Registry name; the `champion` alias always points at the active version.
 REGISTERED_MODEL_NAME = "pulso-catboost"
 # ingestion_runs.source_name of the observations collector. sync_context.py also writes

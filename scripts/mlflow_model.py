@@ -21,7 +21,7 @@ class PulsoBundleModel(mlflow.pyfunc.PythonModel):
     `week_ratio`). With `weekly_naive`, returns the blended prediction that production
     submits (before its online bias correction); without it, CatBoost alone.
 
-    Bundles with model_format "level-ratio-v1" predict demand/level, so they also need the
+    Bundles with a "level-ratio-*" model_format predict demand/level, so they also need the
     `level` column (add_origin_features builds it) to return demand units."""
 
     def load_context(self, context: Any) -> None:
@@ -36,7 +36,7 @@ class PulsoBundleModel(mlflow.pyfunc.PythonModel):
             if not mask.any():
                 continue
             prediction = model.predict(model_input.loc[mask, features])
-            if self.bundle.get("model_format") == "level-ratio-v1":
+            if str(self.bundle.get("model_format", "")).startswith("level-ratio"):
                 prediction = prediction * model_input.loc[mask, "level"].to_numpy(dtype=float)
             if "weekly_naive" in model_input:
                 naive = model_input.loc[mask, "weekly_naive"].to_numpy(dtype=float)

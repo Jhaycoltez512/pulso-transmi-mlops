@@ -293,9 +293,11 @@ tocar nada. Si lo hay:
    sigue midiendo la calidad real del modelo sin que la corrección la
    enmascare. Cada corrección queda registrada en `drift_measurements`
    (`feature_name='prediction_bias'`, marcada como alerta si el sesgo supera
-   el 5%). Se validó con backtest walk-forward antes de adoptarla (ver
-   `docs/ml-baselines.md`). Para desactivarla sin tocar código:
-   `PULSO_BIAS_CORRECTION=false`.
+   el 5%). **Desde el 30-sep solo se mide y registra; no se aplica** salvo que
+   la variable `PULSO_BIAS_CORRECTION` valga `true`. Con el modelo normalizado
+   por nivel no mejoró en el periodo real de cambios, porque el factor global
+   mezcla estaciones que suben con estaciones que bajan (ver
+   `docs/ml-baselines.md`).
 6. **Enviar**: valida el payload localmente (mismo `validate()` que usa la
    vista previa) y hace `POST /v1/submissions` con `Idempotency-Key:
    {cycle_id}:{model_version}` y la versión del modelo + commit de Git. El
@@ -347,8 +349,8 @@ Y estas variables (`vars`, no secrets):
 
 - `PULSO_API_URL`
 - `PULSO_SUBMIT_ENABLED` (opcional; `false` para desactivar el envío real)
-- `PULSO_BIAS_CORRECTION` (opcional; `false` para enviar la salida pura del
-  modelo, sin corrección de sesgo)
+- `PULSO_BIAS_CORRECTION` (opcional; `true` para aplicar la corrección de sesgo
+  global; por defecto solo se mide)
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.

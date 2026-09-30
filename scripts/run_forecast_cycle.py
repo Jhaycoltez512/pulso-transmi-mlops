@@ -9,9 +9,9 @@ See docs/collector-and-lineage.md for the decision rule and its thresholds.
 Set PULSO_SUBMIT_ENABLED=false to run the full pipeline (evaluate, decide, predict,
 validate) without sending the real POST to the competition API.
 
-Before submitting, predictions get an online bias correction (validated in
-scripts/backtest_bias_correction.py): scaled by half of actual/predicted over the last 4h
-of evaluated predictions. Set PULSO_BIAS_CORRECTION=false to submit raw model output.
+The online bias correction (scale by half of actual/predicted over the last 4h of evaluated
+predictions) is measured and logged every cycle but only applied with
+PULSO_BIAS_CORRECTION=true: see docs/ml-baselines.md for why it is off by default.
 """
 
 from __future__ import annotations
@@ -411,7 +411,10 @@ def main() -> None:
         predictions = prediction_rows(data, cycle, models)
 
         cutoff = pd.Timestamp(cycle["data_cutoff"])
-        correction_enabled = os.environ.get("PULSO_BIAS_CORRECTION", "true").strip().lower() != "false"
+        # Off unless PULSO_BIAS_CORRECTION=true: with the level-normalised model it no longer
+        # helped on the real post-change period (the pooled factor mixes stations moving in
+        # opposite directions). The factor is still measured and logged below for monitoring.
+        correction_enabled = os.environ.get("PULSO_BIAS_CORRECTION", "").strip().lower() == "true"
         recent = loader.select("predictions", {
             "select": "predicted_demand,raw_predicted_demand,actual_demand", "actual_demand": "not.is.null",
             "target_at": [f"gt.{(cutoff - timedelta(hours=BIAS_WINDOW_HOURS)).isoformat()}", f"lte.{cutoff.isoformat()}"],

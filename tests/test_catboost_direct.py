@@ -14,7 +14,7 @@ def test_direct_features_use_only_past_demand_and_target_calendar() -> None:
     })
     features = add_origin_features(source)
     supervised = add_target_calendar(features, 15)
-    row = supervised.iloc[0]
+    row = supervised.dropna(subset=["lag_672"]).iloc[0]
     assert row["lag_672"] == row["current_demand"] - 672
     assert row["target_demand"] == row["current_demand"] + 1
     assert row["target_at"] == row["observed_at"] + pd.to_timedelta(15, unit="m")
