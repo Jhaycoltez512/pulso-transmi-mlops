@@ -44,9 +44,11 @@ from train_catboost_direct import (
 
 MODEL_BUCKET = "models"
 # Every retrain uploads a ~10 MB bundle and nothing ever removed old ones: with a retrain per
-# cycle that fills the 1 GB free Storage tier in a couple of days. Keep the active model plus
-# the most recent few (for rollback); MLflow's Model Registry keeps the full history anyway.
+# cycle that filled the 1 GB free Storage tier (1.16 GB on 2026-09-30). Keep the active model,
+# the most recent few (for rollback) and the first few (the original baselines); MLflow's
+# Model Registry keeps the full history anyway.
 MODELS_TO_KEEP = 5
+OLDEST_MODELS_TO_KEEP = 5
 STALENESS_DAYS = 7
 PERFORMANCE_DEGRADATION_FACTOR = 1.15
 PERFORMANCE_MIN_SAMPLES = 20
@@ -254,20 +256,22 @@ def persist_model(url: str, key: str, version: str, models: dict[int, Any], hori
     upload_object(url, key, MODEL_BUCKET, f"{version}.joblib", buffer.getvalue())
 
 
-def models_to_prune(objects: list[dict[str, Any]], keep: set[str], keep_latest: int = MODELS_TO_KEEP) -> list[str]:
-    """Names of stored model bundles to delete: all but `keep` and the `keep_latest` newest."""
+def models_to_prune(
+    objects: list[dict[str, Any]], keep: set[str], keep_latest: int = MODELS_TO_KEEP, keep_oldest: int = OLDEST_MODELS_TO_KEEP,
+) -> list[str]:
+    """Names of stored model bundles to delete: all but `keep`, the `keep_latest` newest and the `keep_oldest` oldest."""
     bundles = sorted(
         (obj for obj in objects if str(obj.get("name", "")).endswith(".joblib")),
         key=lambda obj: obj.get("created_at") or "", reverse=True,
     )
-    newest = {obj["name"] for obj in bundles[:keep_latest]}
-    return [obj["name"] for obj in bundles if obj["name"] not in newest and obj["name"] not in keep]
+    protected = {obj["name"] for obj in bundles[:keep_latest]} | {obj["name"] for obj in bundles[len(bundles) - keep_oldest:]} | keep
+    return [obj["name"] for obj in bundles if obj["name"] not in protected]
 
 
 def prune_stored_models(url: str, key: str, active_version: str) -> None:
     """Best effort: a failed cleanup must never block predicting or submitting."""
     try:
-        stale = models_to_prune(list_objects(url, key, MODEL_BUCKET), {f"{active_version}.joblib"})
+        stale = models_to_prune(list_objects(url, key, MODEL_BUCKET), {f"{active_version}.joblib"}) if active_version else []
         delete_objects(url, key, MODEL_BUCKET, stale)
         if stale:
             print(f"Pruned {len(stale)} old model bundles from Storage.")

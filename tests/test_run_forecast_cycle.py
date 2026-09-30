@@ -160,9 +160,10 @@ def test_models_to_prune_keeps_active_and_newest_bundles() -> None:
 
     objects = [{"name": f"catboost-{i:02d}.joblib", "created_at": f"2026-09-30T{i:02d}:00:00Z"} for i in range(10)]
     objects.append({"name": "README.txt", "created_at": "2026-09-30T23:00:00Z"})
-    stale = models_to_prune(objects, keep={"catboost-01.joblib"}, keep_latest=3)
-    # newest three (07, 08, 09) and the active one (01) survive; non-bundles are never touched
-    assert sorted(stale) == [f"catboost-{i:02d}.joblib" for i in (0, 2, 3, 4, 5, 6)]
+    stale = models_to_prune(objects, keep={"catboost-05.joblib"}, keep_latest=3, keep_oldest=2)
+    # oldest two (00, 01), newest three (07, 08, 09) and the active one (05) survive;
+    # non-bundles are never touched
+    assert sorted(stale) == [f"catboost-{i:02d}.joblib" for i in (2, 3, 4, 6)]
 
 
 def test_lineage_reads_the_observations_collector_not_the_context_sync() -> None:
