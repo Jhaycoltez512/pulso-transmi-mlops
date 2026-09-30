@@ -32,6 +32,9 @@ def main() -> None:
     stale = models_to_prune(objects, {f"{active[0]['version']}.joblib"})
     freed = sum(int((obj.get("metadata") or {}).get("size") or 0) for obj in objects if obj["name"] in stale)
     print(f"{len(objects)} objects, active={active[0]['version']}, deleting {len(stale)} (~{freed / 1e6:.0f} MB), keeping {len(objects) - len(stale)}.")
+    kept = sorted(obj["name"] for obj in objects if obj["name"] not in stale)
+    print("Keeping:\n  " + "\n  ".join(kept))
+    print("Deleting:\n  " + "\n  ".join(sorted(stale)))
     if "--apply" not in sys.argv:
         print("Dry run: pass --apply to delete.")
         return
