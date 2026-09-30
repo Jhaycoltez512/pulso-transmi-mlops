@@ -28,18 +28,47 @@ from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
 
 LAGS = [1, 2, 4, 8, 96, 192, 672]
 ROLLING_WINDOWS = [4, 12, 96, 672]
-NUMERIC_FEATURES = [
-    "hour_sin", "hour_cos", "weekday_sin", "weekday_cos", "is_weekend", "current_demand",
-    *[f"lag_{lag}" for lag in LAGS], *[f"rolling_mean_{window}" for window in ROLLING_WINDOWS],
-]
-FEATURES = ["station_id", *NUMERIC_FEATURES]
+CALENDAR_FEATURES = ["hour_sin", "hour_cos", "weekday_sin", "weekday_cos", "is_weekend"]
+DEMAND_FEATURES = ["current_demand", *[f"lag_{lag}" for lag in LAGS], *[f"rolling_mean_{window}" for window in ROLLING_WINDOWS]]
+# Features of the original model, in raw demand units. Kept for the backtests that document
+# experiments run on that model (recency weighting, seasonal features).
+RAW_FEATURES = ["station_id", *CALENDAR_FEATURES, *DEMAND_FEATURES]
+# Level-normalised model (adopted 2026-09-30). Every demand feature and the target are divided
+# by the station's mean demand over the last LEVEL_WINDOW periods, and the prediction is
+# multiplied back. A tree model can't extrapolate: when the competition moved demand between
+# stations (some x2-3, others down to x0.2), the raw-units model kept predicting inside each
+# station's old range. Ratios are unchanged by a level change, so the same model keeps working.
+LEVEL_WINDOW = 16  # 4 hours; 1 hour was noisier at h60
+# Only the last hour of history goes into the model. Replaying the real mid-September station
+# changes (scripts/backtest_production_shift.py: 05100 falling to ~0.2x of the previous week,
+# 05000/02300 up 2-3x, 03000 ~0.4x) showed that day/week lags -- and the weekly-naive blend --
+# anchor each station to a pattern that no longer holds. Short memory won at every horizon:
+# 87.6/86.6/85.3/84.1% (h15-h60) vs 77.9/76.7/75.6/74.1% for the previous production setup.
+MODEL_DEMAND_FEATURES = ["current_demand", "lag_1", "lag_2", "lag_4", "lag_8", "rolling_mean_4", "rolling_mean_12"]
+FEATURES = ["station_id", *CALENDAR_FEATURES, *[f"norm_{feature}" for feature in MODEL_DEMAND_FEATURES]]
+MODEL_FORMAT = "level-ratio-v2"
 WEEKLY_NAIVE_LAG = timedelta(days=7)
-# Share given to the CatBoost prediction vs. the weekly seasonal-naive prediction. Picked with
-# scripts/backtest_ensemble.py: a walk-forward sweep found 0.70-0.85 near-optimal at every horizon,
-# with WAPE gains over pure CatBoost well above the noise between folds (see docs/ml-baselines.md).
-ENSEMBLE_WEIGHT = 0.75
+WEEK_PERIODS = 672
+# The weekly naive is rescaled by how the last LEVEL_WINDOW periods compare with the same
+# periods a week earlier, so it follows a level shift too instead of anchoring on last week.
+WEEK_RATIO_CLIP = (0.5, 2.0)
+# Share given to the CatBoost prediction vs. the (level-adjusted) weekly naive. 0.75 was picked
+# with scripts/backtest_ensemble.py on the stable initial data; on the real post-change period
+# any naive share made things worse (last week's pattern is exactly what changed), so the blend
+# is off: 1.0 = CatBoost alone. blend_predictions still works for other weights.
+ENSEMBLE_WEIGHT = 1.0
 # MLflow Model Registry name; the `champion` alias always points at the active version.
 REGISTERED_MODEL_NAME = "pulso-catboost"
+# ingestion_runs.source_name of the observations collector. sync_context.py also writes
+# ingestion_runs (without data_version) right after it, so lineage must filter by source or
+# it links the context sync instead of the data the model was trained on -- which is what
+# left data_version=unknown on every retrain since context sync was added. Collector runs
+# that found no new rows also have no data_version; the latest one that did is the version.
+OBSERVATIONS_SOURCE = "pulso-transmi-stream"
+LATEST_OBSERVATIONS_INGESTION = {
+    "status": "eq.succeeded", "source_name": f"eq.{OBSERVATIONS_SOURCE}", "data_version": "not.is.null",
+    "order": "finished_at.desc", "limit": 1,
+}
 
 
 def git_commit() -> str | None:
@@ -65,7 +94,7 @@ def record_lineage(
         return None
     loader = SupabaseLoader(url, key)
     try:
-        ingestions = loader.select("ingestion_runs", {"status": "eq.succeeded", "order": "finished_at.desc", "limit": 1})
+        ingestions = loader.select("ingestion_runs", LATEST_OBSERVATIONS_INGESTION)
         data_version = ingestions[0].get("data_version") if ingestions else None
         version = f"catboost-{pd.Timestamp(data_cutoff).strftime('%Y%m%dT%H%M%SZ')}"
         deactivate = loader.client.patch("/model_versions", params={"is_active": "eq.true"}, json={"is_active": False})
@@ -82,6 +111,7 @@ def record_lineage(
             "trigger_reason": trigger_reason, "status": "succeeded",
             "parameters": {
                 "horizons": sorted(map(int, metrics)), "features": FEATURES, "ensemble_weight": ENSEMBLE_WEIGHT,
+                "model_format": MODEL_FORMAT, "level_window": LEVEL_WINDOW,
                 "performance_thresholds": performance_thresholds(metrics),
             },
         })
@@ -110,7 +140,7 @@ def record_lineage(
                 artifacts={"metrics.json": metrics, "data_manifest.json": data_manifest},
                 artifact_paths=[ARTIFACTS_DIR / "catboost_direct.joblib", ARTIFACTS_DIR / "catboost_direct_metrics.json"],
                 model_bundle=(
-                    {"models": models, "features": FEATURES, "horizons": sorted(models), "ensemble_weight": ENSEMBLE_WEIGHT}
+                    {"models": models, "features": FEATURES, "horizons": sorted(models), "ensemble_weight": ENSEMBLE_WEIGHT, "model_format": MODEL_FORMAT}
                     if models else None
                 ),
                 registered_model_name=REGISTERED_MODEL_NAME,
@@ -138,6 +168,13 @@ def add_origin_features(frame: pd.DataFrame) -> pd.DataFrame:
         data[f"lag_{lag}"] = grouped.shift(lag)
     for window in ROLLING_WINDOWS:
         data[f"rolling_mean_{window}"] = grouped.transform(lambda values: values.shift(1).rolling(window, min_periods=window).mean())
+    # Recent level, including the origin itself: the scale every demand feature is divided by.
+    data["level"] = grouped.transform(lambda values: values.rolling(LEVEL_WINDOW, min_periods=LEVEL_WINDOW).mean()).clip(lower=1.0)
+    for feature in DEMAND_FEATURES:
+        data[f"norm_{feature}"] = data[feature] / data["level"]
+    recent_sum = grouped.transform(lambda values: values.rolling(LEVEL_WINDOW, min_periods=LEVEL_WINDOW).sum())
+    week_before_sum = grouped.transform(lambda values: values.shift(WEEK_PERIODS).rolling(LEVEL_WINDOW, min_periods=LEVEL_WINDOW).sum())
+    data["week_ratio"] = (recent_sum / week_before_sum).clip(*WEEK_RATIO_CLIP)
     return data
 
 
@@ -160,6 +197,11 @@ def naive_prediction_at_target(data: pd.DataFrame, frame: pd.DataFrame) -> np.nd
     lookup = data[["station_id", "observed_at", "demand"]].rename(columns={"observed_at": "naive_at", "demand": "naive_prediction"})
     keys = pd.DataFrame({"station_id": frame["station_id"].to_numpy(), "naive_at": (frame["target_at"] - WEEKLY_NAIVE_LAG).to_numpy()})
     return keys.merge(lookup, on=["station_id", "naive_at"], how="left")["naive_prediction"].to_numpy()
+
+
+def adjusted_naive_at_target(data: pd.DataFrame, frame: pd.DataFrame) -> np.ndarray:
+    """Weekly naive scaled by the recent level vs. the same hours a week before (1.0 if unknown)."""
+    return naive_prediction_at_target(data, frame) * frame["week_ratio"].fillna(1.0).to_numpy()
 
 
 def blend_predictions(catboost_pred: np.ndarray, naive_pred: np.ndarray, weight: float = ENSEMBLE_WEIGHT) -> np.ndarray:
@@ -187,23 +229,40 @@ def model() -> CatBoostRegressor:
     )
 
 
+def fit_model(frame: pd.DataFrame) -> CatBoostRegressor:
+    """Fit on target/level, weighted by level: MAE on the ratio then equals MAE in demand units."""
+    fitted = model()
+    fitted.fit(frame[FEATURES], frame["target_demand"] / frame["level"], cat_features=["station_id"], sample_weight=frame["level"])
+    return fitted
+
+
+def predict_demand(fitted: CatBoostRegressor, frame: pd.DataFrame) -> np.ndarray:
+    return fitted.predict(frame[FEATURES]) * frame["level"].to_numpy()
+
+
 def train_models(data: pd.DataFrame, horizons: list[int]) -> tuple[dict[int, CatBoostRegressor], dict[str, Any]]:
+    """Score on chronological validation/test windows, then refit on all history for production.
+
+    The production model used to be the one fitted on the train split only, so it never saw
+    the most recent 14 days -- exactly where a change in the demand pattern shows up first.
+    Metrics (and the performance_drift thresholds derived from them) still come from the
+    held-out windows; only the model that gets deployed is refit with everything.
+    """
     models: dict[int, CatBoostRegressor] = {}
     report: dict[str, Any] = {}
     for horizon in horizons:
         supervised = add_target_calendar(data, horizon)
         train, validation, test = split_by_target(supervised)
-        fitted = model()
-        fitted.fit(train[FEATURES], train["target_demand"], cat_features=["station_id"])
+        fitted = fit_model(train)
         validation_scores = validation[["station_id", "target_demand"]].rename(columns={"target_demand": "demand"})
         test_scores = test[["station_id", "target_demand"]].rename(columns={"target_demand": "demand"})
-        validation_predictions = blend_predictions(fitted.predict(validation[FEATURES]), naive_prediction_at_target(data, validation))
-        test_predictions = blend_predictions(fitted.predict(test[FEATURES]), naive_prediction_at_target(data, test))
+        validation_predictions = blend_predictions(predict_demand(fitted, validation), adjusted_naive_at_target(data, validation))
+        test_predictions = blend_predictions(predict_demand(fitted, test), adjusted_naive_at_target(data, test))
         validation_metrics = station_metrics(validation_scores, validation_predictions)
         test_metrics = station_metrics(test_scores, test_predictions)
-        models[horizon] = fitted
+        models[horizon] = fit_model(supervised)
         report[str(horizon)] = {
-            "train_rows": len(train), "validation_rows": len(validation), "test_rows": len(test),
+            "train_rows": len(train), "validation_rows": len(validation), "test_rows": len(test), "production_rows": len(supervised),
             "validation": validation_metrics, "test": test_metrics,
         }
     return models, report
@@ -229,7 +288,7 @@ def prediction_rows(data: pd.DataFrame, cycle: dict, models: dict[int, CatBoostR
         inference["weekday_sin"] = np.sin(2 * np.pi * local.dt.dayofweek / 7)
         inference["weekday_cos"] = np.cos(2 * np.pi * local.dt.dayofweek / 7)
         inference["is_weekend"] = (local.dt.dayofweek >= 5).astype(int)
-        values = blend_predictions(models[horizon].predict(inference[FEATURES]), naive_prediction_at_target(data, inference))
+        values = blend_predictions(predict_demand(models[horizon], inference), adjusted_naive_at_target(data, inference))
         target_lookup = {(item.station_id, pd.Timestamp(item.target_at)): item for item in targets.itertuples()}
         for row, value in zip(inference.itertuples(), values, strict=True):
             target = target_lookup.get((row.station_id, row.target_at))
@@ -254,7 +313,7 @@ def main() -> None:
     data_cutoff = cycle["data_cutoff"] if cycle else data["observed_at"].max().isoformat()
     ARTIFACTS_DIR.mkdir(exist_ok=True)
     joblib.dump(
-        {"models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics, "ensemble_weight": ENSEMBLE_WEIGHT},
+        {"models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics, "ensemble_weight": ENSEMBLE_WEIGHT, "model_format": MODEL_FORMAT},
         ARTIFACTS_DIR / "catboost_direct.joblib",
     )
     (ARTIFACTS_DIR / "catboost_direct_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")

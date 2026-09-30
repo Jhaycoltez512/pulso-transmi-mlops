@@ -9,9 +9,9 @@ See docs/collector-and-lineage.md for the decision rule and its thresholds.
 Set PULSO_SUBMIT_ENABLED=false to run the full pipeline (evaluate, decide, predict,
 validate) without sending the real POST to the competition API.
 
-Before submitting, predictions get an online bias correction (validated in
-scripts/backtest_bias_correction.py): scaled by half of actual/predicted over the last 4h
-of evaluated predictions. Set PULSO_BIAS_CORRECTION=false to submit raw model output.
+The online bias correction (scale by half of actual/predicted over the last 4h of evaluated
+predictions) is measured and logged every cycle but only applied with
+PULSO_BIAS_CORRECTION=true: see docs/ml-baselines.md for why it is off by default.
 """
 
 from __future__ import annotations
@@ -28,11 +28,13 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
-from load_supabase import SupabaseLoader, download_object, load_dotenv, upload_object
+from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
     FEATURES,
     ENSEMBLE_WEIGHT,
+    LATEST_OBSERVATIONS_INGESTION,
+    MODEL_FORMAT,
     add_origin_features,
     git_commit,
     prediction_rows,
@@ -41,6 +43,12 @@ from train_catboost_direct import (
 )
 
 MODEL_BUCKET = "models"
+# Every retrain uploads a ~10 MB bundle and nothing ever removed old ones: with a retrain per
+# cycle that filled the 1 GB free Storage tier (1.16 GB on 2026-09-30). Keep the active model,
+# the most recent few (for rollback) and the first few (the original baselines); MLflow's
+# Model Registry keeps the full history anyway.
+MODELS_TO_KEEP = 5
+OLDEST_MODELS_TO_KEEP = 5
 STALENESS_DAYS = 7
 PERFORMANCE_DEGRADATION_FACTOR = 1.15
 PERFORMANCE_MIN_SAMPLES = 20
@@ -64,6 +72,17 @@ DRIFT_FEATURES = ["demand", "rain_forecast", "temperature_forecast", "event_inte
 # stations by the merge in load_training_data() -- dedupe those before counting/scoring so 12
 # copies of the same stale value don't look like a healthy sample.
 PER_TIMESTAMP_FEATURES = {"rain_forecast", "temperature_forecast", "event_intensity"}
+# Per-station level drift. PSI on `demand` pools all 12 stations, so when the competition moved
+# riders between stations (05100 down to 0.2x of the previous week, 05000/02300 up 2-3x) the
+# pooled distribution barely changed (PSI 0.01-0.04) and no data-drift alarm ever fired. This
+# compares each station's last 24h against the same 24h a week earlier, now vs. at the active
+# model's training_data_end: the change in that week-over-week ratio is what the model hasn't
+# seen yet. After a retrain the reference moves to the new cutoff, so a persistent change fires
+# once, not every cycle. On the real data, x1.5 clears the natural variation of stable stations
+# (up to x1.45 within 12h) and catches 05100, 05000, 02300 and 03000.
+STATION_DRIFT_WINDOW = timedelta(hours=24)
+STATION_DRIFT_THRESHOLD = float(np.log(1.5))
+STATION_DRIFT_PREFIX = "station_level:"
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
 BIAS_WINDOW_HOURS = 4
@@ -134,16 +153,32 @@ def evaluate_recent_predictions(loader: SupabaseLoader, data: pd.DataFrame) -> N
             loader.patch("predictions", row.id, {"actual_demand": int(lookup.loc[key]), "evaluated_at": now.isoformat()})
 
 
-def recent_performance(loader: SupabaseLoader, horizons: list[int]) -> dict[int, dict[str, Any]]:
-    """WAPE per horizon from predictions evaluated within the last PERFORMANCE_WINDOW_DAYS.
+def recent_performance_params(since: str, model_version_id: str | None) -> dict[str, Any]:
+    """Only predictions made by the active model count against its own threshold.
+
+    Pooling every model's predictions meant a replaced model's errors kept firing
+    performance_drift for the whole 3-day window, retraining the new model every cycle no
+    matter how it did (seen after the late-September demand shift: 60+ retrains in a row).
+    A fresh model has no evaluated predictions yet, so it is kept until it has
+    PERFORMANCE_MIN_SAMPLES per horizon (two cycles) and then judged on its own record.
+    """
+    params: dict[str, Any] = {
+        "evaluated_at": f"gte.{since}", "select": "station_id,horizon_minutes,predicted_demand,raw_predicted_demand,actual_demand",
+    }
+    if model_version_id:
+        params["select"] += ",forecast_runs!inner(model_version_id)"
+        params["forecast_runs.model_version_id"] = f"eq.{model_version_id}"
+    return params
+
+
+def recent_performance(loader: SupabaseLoader, horizons: list[int], model_version_id: str | None = None) -> dict[int, dict[str, Any]]:
+    """WAPE per horizon from the active model's predictions evaluated within the last PERFORMANCE_WINDOW_DAYS.
 
     Scores the raw model output, so the bias correction can't hide model degradation from
     the retrain rule (the threshold it's compared to is the raw model's validation WAPE).
     """
     since = (pd.Timestamp.now(tz="UTC") - timedelta(days=PERFORMANCE_WINDOW_DAYS)).isoformat()
-    rows = loader.select("predictions", {
-        "evaluated_at": f"gte.{since}", "select": "station_id,horizon_minutes,predicted_demand,raw_predicted_demand,actual_demand",
-    })
+    rows = loader.select("predictions", recent_performance_params(since, model_version_id))
     if not rows:
         return {}
     frame = pd.DataFrame(rows)
@@ -188,6 +223,46 @@ def compute_data_drift(data: pd.DataFrame, active_model: dict[str, Any] | None) 
     return rows
 
 
+def week_log_ratios(data: pd.DataFrame, end: pd.Timestamp) -> dict[str, float]:
+    """ln(demand in the 24h up to `end` / demand in the same 24h a week earlier), per station.
+
+    Stations missing any period in either window are left out rather than scored on a gap.
+    """
+    periods = int(STATION_DRIFT_WINDOW / timedelta(minutes=15))
+    recent = data.loc[(data["observed_at"] > end - STATION_DRIFT_WINDOW) & (data["observed_at"] <= end)]
+    week_end = end - timedelta(days=7)
+    before = data.loc[(data["observed_at"] > week_end - STATION_DRIFT_WINDOW) & (data["observed_at"] <= week_end)]
+    result = {}
+    for station, now_rows in recent.groupby("station_id"):
+        then_rows = before.loc[before["station_id"] == station]
+        if len(now_rows) < periods or len(then_rows) < periods:
+            continue
+        now_sum, then_sum = float(now_rows["demand"].sum()), float(then_rows["demand"].sum())
+        if now_sum > 0 and then_sum > 0:
+            result[str(station)] = float(np.log(now_sum / then_sum))
+    return result
+
+
+def compute_station_drift(data: pd.DataFrame, active_model: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """One row per station: |change in week-over-week log ratio| since the active model's training cutoff."""
+    if active_model is None or not active_model.get("training_data_end"):
+        return []
+    at_training = week_log_ratios(data, pd.Timestamp(active_model["training_data_end"]))
+    now = week_log_ratios(data, data["observed_at"].max())
+    rows = []
+    for station in sorted(set(at_training) & set(now)):
+        change = now[station] - at_training[station]
+        rows.append({
+            "feature_name": f"{STATION_DRIFT_PREFIX}{station}", "drift_type": "data", "method": "week_ratio_shift_24h",
+            "value": abs(change), "threshold": STATION_DRIFT_THRESHOLD, "triggered": abs(change) > STATION_DRIFT_THRESHOLD,
+            "details": {
+                "station_id": station, "ratio_now": float(np.exp(now[station])),
+                "ratio_at_training": float(np.exp(at_training[station])), "relative_change": float(np.exp(change)),
+            },
+        })
+    return rows
+
+
 def decide_action(
     active_model: dict[str, Any] | None,
     performance: dict[int, dict[str, Any]],
@@ -207,6 +282,10 @@ def decide_action(
             return "retrain", f"performance_drift: h{horizon} recent WAPE {result['wape']:.4f} > threshold {threshold:.4f}"
     for row in drift_rows:
         if row["triggered"]:
+            if row["feature_name"].startswith(STATION_DRIFT_PREFIX):
+                change = (row.get("details") or {}).get("relative_change")
+                detail = f"x{change:.2f} vs training" if change is not None else f"{row['value']:.4f}"
+                return "retrain", f"data_drift: {row['feature_name']} {detail} > x{np.exp(row['threshold']):.2f}"
             return "retrain", f"data_drift: {row['feature_name']} PSI={row['value']:.4f} > {row['threshold']}"
     return "keep", "stable: no trigger met"
 
@@ -225,13 +304,44 @@ def fetch_active_model(loader: SupabaseLoader) -> dict[str, Any] | None:
 
 def persist_model(url: str, key: str, version: str, models: dict[int, Any], horizons: list[int], metrics: dict[str, Any]) -> None:
     buffer = io.BytesIO()
-    joblib.dump({"models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics, "ensemble_weight": ENSEMBLE_WEIGHT}, buffer)
+    joblib.dump({
+        "models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics,
+        "ensemble_weight": ENSEMBLE_WEIGHT, "model_format": MODEL_FORMAT,
+    }, buffer)
     upload_object(url, key, MODEL_BUCKET, f"{version}.joblib", buffer.getvalue())
+
+
+def models_to_prune(
+    objects: list[dict[str, Any]], keep: set[str], keep_latest: int = MODELS_TO_KEEP, keep_oldest: int = OLDEST_MODELS_TO_KEEP,
+) -> list[str]:
+    """Names of stored model bundles to delete: all but `keep`, the `keep_latest` newest and the `keep_oldest` oldest."""
+    bundles = sorted(
+        (obj for obj in objects if str(obj.get("name", "")).endswith(".joblib")),
+        key=lambda obj: obj.get("created_at") or "", reverse=True,
+    )
+    protected = {obj["name"] for obj in bundles[:keep_latest]} | {obj["name"] for obj in bundles[len(bundles) - keep_oldest:]} | keep
+    return [obj["name"] for obj in bundles if obj["name"] not in protected]
+
+
+def prune_stored_models(url: str, key: str, active_version: str) -> None:
+    """Best effort: a failed cleanup must never block predicting or submitting."""
+    try:
+        stale = models_to_prune(list_objects(url, key, MODEL_BUCKET), {f"{active_version}.joblib"}) if active_version else []
+        delete_objects(url, key, MODEL_BUCKET, stale)
+        if stale:
+            print(f"Pruned {len(stale)} old model bundles from Storage.")
+    except Exception as error:
+        print(f"Model storage cleanup skipped: {error}")
 
 
 def load_active_models(url: str, key: str, active_model: dict[str, Any]) -> dict[int, Any]:
     blob = download_object(url, key, MODEL_BUCKET, f"{active_model['version']}.joblib")
-    return joblib.load(io.BytesIO(blob))["models"]
+    bundle = joblib.load(io.BytesIO(blob))
+    # A bundle from before the level-ratio model predicts in different units with different
+    # features: raising here sends the caller down its "keep failed, fallback to retrain" path.
+    if bundle.get("model_format") != MODEL_FORMAT:
+        raise RuntimeError(f"active model format {bundle.get('model_format') or 'raw-v0'} != {MODEL_FORMAT}")
+    return bundle["models"]
 
 
 def retrain_and_persist(url: str, key: str, data: pd.DataFrame, horizons: list[int], cycle: dict, reason: str) -> tuple[dict[int, Any], str, str]:
@@ -240,6 +350,7 @@ def retrain_and_persist(url: str, key: str, data: pd.DataFrame, horizons: list[i
     if lineage is None:
         raise RuntimeError("record_lineage failed: Supabase credentials missing mid-run.")
     persist_model(url, key, lineage["version"], models, horizons, metrics)
+    prune_stored_models(url, key, lineage["version"])
     return models, lineage["model_version_id"], lineage["version"]
 
 
@@ -324,10 +435,10 @@ def main() -> None:
 
         active_model = fetch_active_model(loader)
         horizons = sorted({int(target["horizon_minutes"]) for target in cycle["targets"]})
-        performance = recent_performance(loader, horizons)
-        drift_rows = compute_data_drift(data, active_model)
+        performance = recent_performance(loader, horizons, (active_model or {}).get("id"))
+        drift_rows = compute_data_drift(data, active_model) + compute_station_drift(data, active_model)
 
-        ingestions = loader.select("ingestion_runs", {"status": "eq.succeeded", "order": "finished_at.desc", "limit": 1})
+        ingestions = loader.select("ingestion_runs", LATEST_OBSERVATIONS_INGESTION)
         ingestion_run_id = ingestions[0]["id"] if ingestions else None
         if ingestion_run_id and drift_rows:
             loader.insert_many("drift_measurements", [
@@ -355,7 +466,10 @@ def main() -> None:
         predictions = prediction_rows(data, cycle, models)
 
         cutoff = pd.Timestamp(cycle["data_cutoff"])
-        correction_enabled = os.environ.get("PULSO_BIAS_CORRECTION", "true").strip().lower() != "false"
+        # Off unless PULSO_BIAS_CORRECTION=true: with the level-normalised model it no longer
+        # helped on the real post-change period (the pooled factor mixes stations moving in
+        # opposite directions). The factor is still measured and logged below for monitoring.
+        correction_enabled = os.environ.get("PULSO_BIAS_CORRECTION", "").strip().lower() == "true"
         recent = loader.select("predictions", {
             "select": "predicted_demand,raw_predicted_demand,actual_demand", "actual_demand": "not.is.null",
             "target_at": [f"gt.{(cutoff - timedelta(hours=BIAS_WINDOW_HOURS)).isoformat()}", f"lte.{cutoff.isoformat()}"],

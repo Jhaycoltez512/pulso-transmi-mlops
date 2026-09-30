@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# The external cron's workflow_dispatch and GitHub's own schedule can fire at the same minute
+# (seen 2026-09-29 20:40): two runs then retrain and submit for the same cycle, and one fails.
+# Queue instead of overlapping; never cancel a run that may be mid-submission.
+concurrency:
+  group: pulso-pipeline
+  cancel-in-progress: false
+
 jobs:
   collect:
     runs-on: ubuntu-latest

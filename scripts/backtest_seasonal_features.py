@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
-from train_catboost_direct import ENSEMBLE_WEIGHT, FEATURES, add_origin_features, add_target_calendar, model
+from train_catboost_direct import ENSEMBLE_WEIGHT, RAW_FEATURES as FEATURES, add_origin_features, add_target_calendar, model
 
 WEEK = 672
 TEST_DAYS = 7

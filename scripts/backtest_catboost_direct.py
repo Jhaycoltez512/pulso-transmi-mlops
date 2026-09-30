@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
-from train_catboost_direct import FEATURES, add_origin_features, add_target_calendar, model
+from train_catboost_direct import add_origin_features, add_target_calendar, fit_model, predict_demand
 
 TEST_DAYS = 7
 MIN_TRAIN_ROWS = 8064 * 2  # at least two weeks, so lag_672/rolling_672 are not mostly empty
@@ -47,11 +47,10 @@ def run_backtest(horizons: list[int]) -> dict[str, Any]:
         supervised = add_target_calendar(data, horizon)
         fold_reports = []
         for fold in build_folds(supervised):
-            fitted = model()
-            fitted.fit(fold["train"][FEATURES], fold["train"]["target_demand"], cat_features=["station_id"])
+            fitted = fit_model(fold["train"])
             metrics = station_metrics(
                 fold["test"][["station_id", "target_demand"]].rename(columns={"target_demand": "demand"}),
-                fitted.predict(fold["test"][FEATURES]),
+                predict_demand(fitted, fold["test"]),
             )
             fold_reports.append({
                 "window_start": fold["window_start"].isoformat(),

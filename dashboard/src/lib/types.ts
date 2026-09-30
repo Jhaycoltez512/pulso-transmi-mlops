@@ -73,7 +73,17 @@ export interface DriftMeasurement {
   threshold: number | null;
   triggered: boolean;
   calculated_at: string;
-  details: { factor?: number; applied_scale?: number; samples?: number; enabled?: boolean } | null;
+  details: {
+    factor?: number;
+    applied_scale?: number;
+    samples?: number;
+    enabled?: boolean;
+    // station_level:* rows (per-station drift)
+    station_id?: string;
+    ratio_now?: number;
+    ratio_at_training?: number;
+    relative_change?: number;
+  } | null;
 }
 
 export interface LeaderboardRow {

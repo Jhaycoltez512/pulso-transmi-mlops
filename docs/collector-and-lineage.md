@@ -113,6 +113,13 @@ Después instala el extra:
 python -m pip install -e '.[mlops]'
 ```
 
+**`data_version` en el lineage.** El reentreno toma el `data_version` de la última
+corrida *del collector de observaciones* (`source_name='pulso-transmi-stream'`) que trajo
+filas nuevas. Antes tomaba la última corrida exitosa de `ingestion_runs` de cualquier tipo.
+Desde que existe `sync_context.py`, que corre después del collector y no tiene
+`data_version`, eso dejaba `data_version=unknown` en todos los reentrenos y enlazaba la
+corrida de contexto en MLflow.
+
 `scripts/sync_stream_observations.py` (el collector) **no** loguea a MLflow —
 corre cada 10 minutos, y crear un run ahí en cada corrida ensuciaría el
 experimento con entradas casi siempre iguales. Supabase sigue siendo la
@@ -217,12 +224,43 @@ tocar nada. Si lo hay:
    3. `performance_drift: h{H} recent WAPE {x} > threshold {y}` — el WAPE
       reciente de algún horizonte supera en 15% el WAPE de validación *del
       propio modelo activo* (ese umbral se calculó una vez al entrenarlo, no
-      se recalcula en cada corrida).
+      se recalcula en cada corrida). El WAPE reciente se calcula solo con las
+      predicciones hechas por el modelo activo. Antes se mezclaban las de
+      todos los modelos de los últimos 3 días, así que los errores de un
+      modelo ya reemplazado seguían disparando reentrenos del nuevo en cada
+      ciclo. Un modelo recién entrenado se conserva hasta tener 20
+      predicciones evaluadas por horizonte (dos ciclos) y luego se juzga por
+      su propio desempeño.
    4. `data_drift: {feature} PSI={x} > {umbral}` — PSI de alguna variable
       supera su umbral: 0.25 (estándar de industria para "cambio
       significativo") para `demand`, `rain_forecast` y
       `temperature_forecast`, y 2.0 para `event_intensity`.
-   5. Si nada aplica: `stable: no trigger met` → se conserva el modelo.
+   5. `data_drift: station_level:{estación} x{cambio} vs training > x1.50` —
+      drift por estación (ver abajo).
+   6. Si nada aplica: `stable: no trigger met` → se conserva el modelo.
+
+   **Drift por estación.** El PSI de `demand` junta las 12 estaciones. Cuando
+   la competencia movió pasajeros entre estaciones (desde el 13-sep: 05100
+   bajó a ×0.18 de la semana anterior, 05000 y 02300 subieron ×2.5–3.2, 03000
+   bajó a ×0.41), el PSI se quedó en 0.01–0.04 y nunca avisó, porque las
+   subidas y bajadas se compensan. Por eso se añadió un indicador por
+   estación:
+
+   - `ratio` = demanda de la estación en las últimas 24 h ÷ la de las mismas
+     24 h de la semana anterior (compara igual hora y día de la semana).
+   - El valor medido es cuánto cambió ese `ratio` desde el `training_data_end`
+     del modelo activo: `|ln(ratio_ahora / ratio_al_entrenar)|`.
+   - Umbral ×1.5 (`ln 1.5 ≈ 0.405`). En los datos reales, las estaciones
+     estables variaron como máximo ×1.45 en 12 h, y 05100, 05000, 02300 y
+     03000 lo superaron (×1.6–×1.9).
+   - Como la referencia es el corte del modelo activo, un cambio que
+     persiste dispara **un** reentreno. Después la referencia pasa al nuevo
+     corte y no vuelve a disparar hasta que la estación cambie otra vez.
+
+   Se guarda una fila por estación en `drift_measurements`
+   (`feature_name='station_level:<id>'`, `method='week_ratio_shift_24h'`,
+   con `ratio_now`, `ratio_at_training` y `relative_change` en `details`), y
+   el dashboard la muestra en la tarjeta "Drift por estación".
 
    `event_intensity` tiene umbral propio porque es una variable dispersa
    (eventos poco frecuentes): cualquier ventana de 3 días sin eventos
@@ -255,7 +293,13 @@ tocar nada. Si lo hay:
    corridas de GitHub Actions (cada corrida es una VM nueva, sin disco
    persistente). `model_versions.is_active` marca cuál es el vigente; solo
    puede haber uno (índice único parcial). Si falla la descarga, cae a
-   reentrenar como salvavidas y lo dice en la razón registrada.
+   reentrenar como salvavidas y lo dice en la razón registrada. Lo mismo
+   ocurre si el modelo activo tiene un `model_format` anterior al actual.
+   Después de cada reentreno se borran del bucket los bundles viejos: se
+   conservan el activo y los 5 más recientes (`MODELS_TO_KEEP`). Antes no se
+   borraba nada y cada reentreno sumaba ~10 MB al plan gratuito de 1 GB. El
+   historial completo queda en el Model Registry de MLflow. Si la limpieza
+   falla, solo se imprime un aviso.
 5. **Predecir**: las 12 estaciones × horizontes que pida el ciclo (48 valores
    si pide los 4 horizontes), reusando `prediction_rows` de
    `train_catboost_direct.py`.
@@ -274,9 +318,11 @@ tocar nada. Si lo hay:
    sigue midiendo la calidad real del modelo sin que la corrección la
    enmascare. Cada corrección queda registrada en `drift_measurements`
    (`feature_name='prediction_bias'`, marcada como alerta si el sesgo supera
-   el 5%). Se validó con backtest walk-forward antes de adoptarla (ver
-   `docs/ml-baselines.md`). Para desactivarla sin tocar código:
-   `PULSO_BIAS_CORRECTION=false`.
+   el 5%). **Desde el 30-sep solo se mide y registra; no se aplica** salvo que
+   la variable `PULSO_BIAS_CORRECTION` valga `true`. Con el modelo normalizado
+   por nivel no mejoró en el periodo real de cambios, porque el factor global
+   mezcla estaciones que suben con estaciones que bajan (ver
+   `docs/ml-baselines.md`).
 6. **Enviar**: valida el payload localmente (mismo `validate()` que usa la
    vista previa) y hace `POST /v1/submissions` con `Idempotency-Key:
    {cycle_id}:{model_version}` y la versión del modelo + commit de Git. El
@@ -310,6 +356,12 @@ de esos intentos caiga dentro de la ventana. Como ambos scripts son
 idempotentes (el collector no duplica filas; el orquestador crea un
 `forecast_run` nuevo por corrida y su decisión no depende de cuántas
 corridas hubo antes), correr de más tampoco tiene costo más allá del cómputo.
+El workflow declara `concurrency: pulso-pipeline` sin cancelar la corrida en curso. El
+cron externo y el `schedule` de GitHub llegaron a disparar en el mismo minuto (29-sep
+20:40): las dos corridas reentrenaron y enviaron para el mismo ciclo, y una terminó con
+`submission=failed`. Ahora la segunda espera y, al arrancar, ve que el ciclo ya tiene un
+envío aceptado.
+
 Configura estos secrets en GitHub:
 
 - `PULSO_API_KEY`
@@ -322,8 +374,8 @@ Y estas variables (`vars`, no secrets):
 
 - `PULSO_API_URL`
 - `PULSO_SUBMIT_ENABLED` (opcional; `false` para desactivar el envío real)
-- `PULSO_BIAS_CORRECTION` (opcional; `false` para enviar la salida pura del
-  modelo, sin corrección de sesgo)
+- `PULSO_BIAS_CORRECTION` (opcional; `true` para aplicar la corrección de sesgo
+  global; por defecto solo se mide)
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.

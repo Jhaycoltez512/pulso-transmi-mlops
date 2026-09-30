@@ -69,9 +69,11 @@ vez de encadenar predicciones recursivas. Usa `loss_function="MAE"`, alineado
 con WAPE porque minimiza la mediana condicional en lugar de la media.
 
 Variables: calendario cíclico del momento objetivo, demanda actual, rezagos
-(`lag_1` a `lag_672`) y medias móviles (`rolling_mean_4` a `rolling_mean_672`).
+(`lag_1` a `lag_672`) y medias móviles (`rolling_mean_4` a `rolling_mean_672`). Desde el
+30-sep todas las variables de demanda y el objetivo van normalizados por el nivel reciente
+de la estación (ver "Adoptado: modelo normalizado por nivel" más abajo).
 
-La predicción final no es la salida cruda de CatBoost: se mezcla con el
+Hasta el 30-sep la predicción final no era la salida cruda de CatBoost: se mezclaba con el
 baseline naive semanal, `0.75 * catboost + 0.25 * naive` (`ENSEMBLE_WEIGHT` en
 el script), con retroceso a CatBoost solo si falta la demanda de hace siete
 días. El peso se eligió con `scripts/backtest_ensemble.py`, que barre pesos de
@@ -210,6 +212,72 @@ Resultados y modelo se guardan en `artifacts/catboost_direct_metrics.json` y
 lineage en Supabase (`model_versions`, `training_runs`, `model_metrics`) con
 el `data_version` de la corrida de datos usada y el commit de Git activo al
 momento de entrenar.
+
+### Adoptado: modelo normalizado por nivel, memoria corta y reentreno con toda la historia
+
+**Qué pasó.** Desde el 13-sep (tiempo simulado) la competencia empezó a mover demanda entre
+estaciones, de forma progresiva: frente a la semana anterior, 05100 cayó a 0.72 → 0.43 →
+0.18, 05000 subió ×2.5 → ×3.2, 02300 ×2.0 → ×2.5, 03000 bajó a 0.41 y 07111 quedó ×1.4.
+Las otras 7 estaciones siguieron estables. La accuracy de producción pasó de ~85% a 77–80%
+(13–15 sep) y a 65–70% (16–17 sep); 05100 llegó a −50%. El PSI de `demand` no lo vio
+(0.01–0.04, porque mezcla todas las estaciones y los cambios se compensan) y reentrenar cada
+ciclo no ayudaba.
+
+**Por qué no se recuperaba:**
+
+1. **El modelo desplegado nunca veía los últimos 14 días.** `train_models` ajustaba con el
+   split de entrenamiento y usaba ese modelo en producción. Ahora las métricas y los
+   umbrales de `performance_drift` salen de validación/prueba como antes, pero el modelo
+   desplegado se reajusta con toda la historia.
+2. **Un árbol no extrapola** fuera del rango de demanda que vio al entrenar.
+3. **Los rezagos de 1 día / 1 semana y el naive semanal anclan cada estación a un patrón
+   que ya no existe.**
+
+**Qué se adoptó** (`scripts/train_catboost_direct.py`):
+
+- Features y objetivo normalizados por el nivel de cada estación (media de las últimas 4 h,
+  `LEVEL_WINDOW=16`); la predicción se multiplica de vuelta. Ajuste con
+  `sample_weight=level`, así el MAE sobre el cociente equivale al MAE en unidades de
+  demanda.
+- Solo memoria corta (`MODEL_DEMAND_FEATURES`: demanda actual, `lag_1/2/4/8`,
+  `rolling_mean_4/12`) más calendario y estación.
+- Sin mezcla con el naive semanal (`ENSEMBLE_WEIGHT=1.0`).
+- Corrección de sesgo en línea desactivada por defecto (se sigue midiendo y registrando).
+
+**Validación con datos reales** (`scripts/backtest_production_shift.py`): repite el periodo
+12–18 sep con los datos de Supabase. Cada 12 h se entrena con todo lo conocido en ese
+momento y se predice las 12 h siguientes, igual que en producción. Se compararon 52
+combinaciones (modelo crudo / por nivel / por nivel con memoria corta × sin naive / naive /
+naive ajustado con cotas 0.5–2 o 0.1–5 × sin corrección / corrección global / por
+estación al 50% o 100%). La misma combinación ganó en los cuatro horizontes:
+
+| Horizonte | Producción anterior | Nivel + naive ajustado + corrección global | **Adoptado** |
+|---|---:|---:|---:|
+| 15 min | 77.86% | 85.60% | **87.55%** |
+| 30 min | 76.74% | 84.70% | **86.60%** |
+| 45 min | 75.57% | 83.57% | **85.33%** |
+| 60 min | 74.14% | 82.64% | **84.08%** |
+
+Por estación (h15), el modelo adoptado queda entre 86.4% y 88.5% en las 12, incluidas las
+que cambiaron (05100: 44% → 88%, 05000: 65% → 88%, 02300: 70% → 89%). En los días
+16–17 sep llega a ~91% en h15 y ~87.5% en h60.
+
+**Costo en régimen estable.** Con el dataset inicial (sin cambios de patrón) el modelo
+adoptado da 86.1/85.4/84.5/83.8% en validación (h15–h60), contra 87.1/86.9/86.6/86.6% del
+modelo anterior: pierde 1–3 puntos cuando nada cambia, a cambio de 10 puntos o más cuando
+cambia. Dado que el reto anuncia cambios de patrón, se prioriza la robustez. Los umbrales
+de `performance_drift` salen de esa validación (WAPE ×1.15 ≈ 0.16–0.19).
+
+**Advertencia.** Se eligió la mejor de 52 combinaciones sobre el mismo periodo, así que la
+cifra exacta es algo optimista. La ventaja sobre la producción anterior (8–10 puntos) es
+mucho mayor que ese sesgo de selección, y la misma combinación ganó en los cuatro
+horizontes por separado.
+
+**Compatibilidad.** Los bundles llevan `model_format="level-ratio-v2"`. Si el modelo activo
+en Storage tiene otro formato, `run_forecast_cycle.py` no lo reutiliza y reentrena. Los
+backtests de pesos, sesgo y walk-forward usan el modelo actual (`fit_model` /
+`predict_demand`); los de recencia y features estacionales conservan `RAW_FEATURES` porque
+documentan experimentos sobre el modelo anterior.
 
 ## Backtest walk-forward de CatBoost
 

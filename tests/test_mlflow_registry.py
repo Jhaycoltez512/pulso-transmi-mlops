@@ -67,3 +67,21 @@ def test_log_run_versions_the_dataset_as_an_input_and_a_downloadable_artifact(
     local_path = client.download_artifacts(run_id, "dataset/training-snapshot-v1.parquet", str(tmp_path))
     roundtrip = pd.read_parquet(local_path)
     pd.testing.assert_frame_equal(roundtrip, frame)
+
+
+def test_level_ratio_bundle_returns_demand_units(tmp_path: Path) -> None:
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
+    mlflow.set_experiment("registry-level-test")
+    features = ["station_id", "x"]
+    frame = pd.DataFrame({"station_id": ["03000", "05000"] * 20, "x": np.arange(40, dtype=float)})
+    model = CatBoostRegressor(iterations=20, verbose=False, allow_writing_files=False)
+    model.fit(frame[features], frame["x"] * 0.01 + 1, cat_features=["station_id"])
+    bundle = {"models": {15: model}, "features": features, "horizons": [15], "ensemble_weight": 0.75, "model_format": "level-ratio-v1"}
+
+    with mlflow.start_run():
+        register_bundle(mlflow, bundle, "pulso-level-test")
+
+    loaded = mlflow.pyfunc.load_model("models:/pulso-level-test@champion")
+    request = frame.head(4).assign(horizon_minutes=15)
+    ratio = model.predict(request[features])
+    assert np.allclose(loaded.predict(request.assign(level=200.0)), ratio * 200.0)

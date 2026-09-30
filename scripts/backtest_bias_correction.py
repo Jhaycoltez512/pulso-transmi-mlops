@@ -20,7 +20,7 @@ import pandas as pd
 
 from backtest_catboost_direct import build_folds
 from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
-from train_catboost_direct import FEATURES, add_origin_features, add_target_calendar, blend_predictions, model, naive_prediction_at_target
+from train_catboost_direct import add_origin_features, add_target_calendar, adjusted_naive_at_target, blend_predictions, fit_model, predict_demand
 
 WINDOW_HOURS = (4, 12, 24)
 ALPHAS = (0.5, 1.0)
@@ -68,9 +68,8 @@ def run(horizons: list[int]) -> dict[str, Any]:
         folds = []
         for fold in build_folds(supervised):
             train, test = fold["train"], fold["test"]
-            fitted = model()
-            fitted.fit(train[FEATURES], train["target_demand"], cat_features=["station_id"])
-            production = blend_predictions(fitted.predict(test[FEATURES]), naive_prediction_at_target(data, test))
+            fitted = fit_model(train)
+            production = blend_predictions(predict_demand(fitted, test), adjusted_naive_at_target(data, test))
             row: dict[str, Any] = {"window_start": fold["window_start"].isoformat(), "production": score(test, production)}
             for scope in SCOPES:
                 for hours in WINDOW_HOURS:

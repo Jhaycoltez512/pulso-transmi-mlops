@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
-from train_catboost_direct import FEATURES, add_origin_features, add_target_calendar, model, naive_prediction_at_target
+from train_catboost_direct import add_origin_features, add_target_calendar, adjusted_naive_at_target, fit_model, predict_demand
 from backtest_catboost_direct import build_folds
 
 WEIGHTS = [0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]  # share given to the CatBoost prediction
@@ -27,10 +27,9 @@ def run_backtest(horizons: list[int]) -> dict[str, Any]:
         supervised = add_target_calendar(data, horizon)
         fold_reports = []
         for fold in build_folds(supervised):
-            fitted = model()
-            fitted.fit(fold["train"][FEATURES], fold["train"]["target_demand"], cat_features=["station_id"])
-            catboost_pred = fitted.predict(fold["test"][FEATURES])
-            naive_pred = naive_prediction_at_target(data, fold["test"])
+            fitted = fit_model(fold["train"])
+            catboost_pred = predict_demand(fitted, fold["test"])
+            naive_pred = adjusted_naive_at_target(data, fold["test"])
             valid = ~np.isnan(naive_pred)
             frame = fold["test"].loc[valid, ["station_id", "target_demand"]].rename(columns={"target_demand": "demand"})
             row = {

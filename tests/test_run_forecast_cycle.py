@@ -153,3 +153,74 @@ def test_context_features_are_deduplicated_across_stations_before_counting() -> 
     assert temp_row["details"]["valid_samples"] >= DRIFT_MIN_VALID_SAMPLES
     # demand is genuinely per-station, so its count is much larger
     assert demand_row["details"]["valid_samples"] > temp_row["details"]["valid_samples"]
+
+
+def test_models_to_prune_keeps_active_and_newest_bundles() -> None:
+    from run_forecast_cycle import models_to_prune
+
+    objects = [{"name": f"catboost-{i:02d}.joblib", "created_at": f"2026-09-30T{i:02d}:00:00Z"} for i in range(10)]
+    objects.append({"name": "README.txt", "created_at": "2026-09-30T23:00:00Z"})
+    stale = models_to_prune(objects, keep={"catboost-05.joblib"}, keep_latest=3, keep_oldest=2)
+    # oldest two (00, 01), newest three (07, 08, 09) and the active one (05) survive;
+    # non-bundles are never touched
+    assert sorted(stale) == [f"catboost-{i:02d}.joblib" for i in (2, 3, 4, 6)]
+
+
+def test_lineage_reads_the_observations_collector_not_the_context_sync() -> None:
+    from train_catboost_direct import LATEST_OBSERVATIONS_INGESTION
+
+    assert LATEST_OBSERVATIONS_INGESTION["source_name"] == "eq.pulso-transmi-stream"
+    assert LATEST_OBSERVATIONS_INGESTION["data_version"] == "not.is.null"
+
+
+def test_recent_performance_only_scores_the_active_models_predictions() -> None:
+    from run_forecast_cycle import recent_performance_params
+
+    params = recent_performance_params("2026-09-30T00:00:00+00:00", "model-123")
+    assert params["forecast_runs.model_version_id"] == "eq.model-123"
+    assert "forecast_runs!inner(model_version_id)" in params["select"]
+    assert "forecast_runs.model_version_id" not in recent_performance_params("2026-09-30T00:00:00+00:00", None)
+
+
+def _station_frame(days: int = 16, stations: tuple[str, ...] = ("05000", "05100")) -> pd.DataFrame:
+    timestamps = pd.date_range("2026-09-01", periods=days * 96, freq="15min", tz="UTC")
+    rng = np.random.default_rng(3)
+    return pd.concat([
+        pd.DataFrame({"station_id": s, "observed_at": timestamps, "demand": 300 + rng.normal(0, 15, len(timestamps))})
+        for s in stations
+    ], ignore_index=True)
+
+
+def test_station_drift_fires_only_for_the_station_that_changed() -> None:
+    from run_forecast_cycle import compute_station_drift
+
+    data = _station_frame()
+    end = data["observed_at"].max()
+    trained = end - timedelta(days=2)
+    data.loc[(data["station_id"] == "05100") & (data["observed_at"] > trained), "demand"] *= 0.4
+    rows = {row["details"]["station_id"]: row for row in compute_station_drift(data, {"training_data_end": trained.isoformat()})}
+    assert rows["05100"]["triggered"] is True
+    assert 0.35 < rows["05100"]["details"]["relative_change"] < 0.45
+    assert rows["05000"]["triggered"] is False
+
+
+def test_station_drift_does_not_refire_after_retraining_on_the_new_level() -> None:
+    from run_forecast_cycle import compute_station_drift
+
+    data = _station_frame()
+    end = data["observed_at"].max()
+    data.loc[(data["station_id"] == "05100") & (data["observed_at"] > end - timedelta(days=2)), "demand"] *= 0.4
+    # a model retrained at the current cutoff already saw the new level: nothing new to react to
+    rows = compute_station_drift(data, {"training_data_end": end.isoformat()})
+    assert rows and not any(row["triggered"] for row in rows)
+
+
+def test_decide_action_names_the_station_on_station_drift() -> None:
+    now = pd.Timestamp.now(tz="UTC")
+    drift_rows = [{
+        "feature_name": "station_level:05100", "value": 0.9, "threshold": float(np.log(1.5)), "triggered": True,
+        "details": {"relative_change": 0.41},
+    }]
+    action, reason = decide_action({"trained_at": now.isoformat()}, {}, {}, drift_rows, now)
+    assert action == "retrain"
+    assert reason == "data_drift: station_level:05100 x0.41 vs training > x1.50"
