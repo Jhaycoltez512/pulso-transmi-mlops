@@ -5,6 +5,7 @@ import { DriftSignals } from "./components/DriftSignals";
 import { ErrorDistribution } from "./components/ErrorDistribution";
 import { MapIcon } from "./components/icons";
 import { LastRun } from "./components/LastRun";
+import { PredictionVsActual } from "./components/PredictionVsActual";
 import { Leaderboard } from "./components/Leaderboard";
 import { StationDrift } from "./components/StationDrift";
 import { StationMap } from "./components/StationMap";
@@ -61,6 +62,9 @@ export default function App() {
           <StationMap stations={stations} selected={selectedStation} onSelect={setSelectedStation} />
           <div className="mt-5 border-t border-slate-800 pt-5">
             <StationSeries stationId={selectedStation} stationName={selected?.station_name ?? null} />
+          </div>
+          <div className="mt-5 border-t border-slate-800 pt-5">
+            <PredictionVsActual stationId={selectedStation} stationName={selected?.station_name ?? null} />
           </div>
         </Card>
 

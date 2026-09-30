@@ -20,7 +20,16 @@ export function StationSeries({ stationId, stationName }: { stationId: string | 
     let cancelled = false;
     setLoading(true);
     async function load() {
-      const since = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      // Anchor on the station's latest observation, not the wall clock: the competition runs on
+      // simulated time days behind real time, so "the last 7 days from now" was always empty.
+      const { data: latest } = await supabase
+        .from("observations")
+        .select("observed_at")
+        .eq("station_id", stationId)
+        .order("observed_at", { ascending: false })
+        .limit(1);
+      const end = latest?.[0]?.observed_at ? new Date(latest[0].observed_at).getTime() : Date.now();
+      const since = new Date(end - HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString();
       const { data } = await supabase
         .from("observations")
         .select("station_id,observed_at,demand")
@@ -45,7 +54,7 @@ export function StationSeries({ stationId, stationName }: { stationId: string | 
     <div>
       <div className="mb-3 flex items-center justify-between">
         <p className="text-xs text-slate-500">
-          últimos {HISTORY_DAYS} días {stationName && <span className="text-slate-400">· {stationName}</span>}
+          últimos {HISTORY_DAYS} días de datos {stationName && <span className="text-slate-400">· {stationName}</span>}
         </p>
         {stationId && <LiveBadge lastUpdated={lastFetched} />}
       </div>
