@@ -107,6 +107,30 @@ def download_object(url: str, key: str, bucket: str, path: str) -> bytes:
     return response.content
 
 
+def list_objects(url: str, key: str, bucket: str, limit: int = 1000) -> list[dict[str, Any]]:
+    """List the files at the root of a bucket (name, created_at, ...)."""
+    storage_url = f"{url.rstrip('/')}/storage/v1"
+    response = httpx.post(
+        f"{storage_url}/object/list/{bucket}", timeout=60,
+        json={"prefix": "", "limit": limit, "offset": 0, "sortBy": {"column": "created_at", "order": "desc"}},
+        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def delete_objects(url: str, key: str, bucket: str, paths: list[str]) -> None:
+    """Delete several files from a bucket in one request."""
+    if not paths:
+        return
+    storage_url = f"{url.rstrip('/')}/storage/v1"
+    response = httpx.request(
+        "DELETE", f"{storage_url}/object/{bucket}", timeout=60, json={"prefixes": paths},
+        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+    )
+    response.raise_for_status()
+
+
 def main() -> None:
     load_dotenv()
     url = os.getenv("SUPABASE_URL")

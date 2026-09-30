@@ -153,3 +153,29 @@ def test_context_features_are_deduplicated_across_stations_before_counting() -> 
     assert temp_row["details"]["valid_samples"] >= DRIFT_MIN_VALID_SAMPLES
     # demand is genuinely per-station, so its count is much larger
     assert demand_row["details"]["valid_samples"] > temp_row["details"]["valid_samples"]
+
+
+def test_models_to_prune_keeps_active_and_newest_bundles() -> None:
+    from run_forecast_cycle import models_to_prune
+
+    objects = [{"name": f"catboost-{i:02d}.joblib", "created_at": f"2026-09-30T{i:02d}:00:00Z"} for i in range(10)]
+    objects.append({"name": "README.txt", "created_at": "2026-09-30T23:00:00Z"})
+    stale = models_to_prune(objects, keep={"catboost-01.joblib"}, keep_latest=3)
+    # newest three (07, 08, 09) and the active one (01) survive; non-bundles are never touched
+    assert sorted(stale) == [f"catboost-{i:02d}.joblib" for i in (0, 2, 3, 4, 5, 6)]
+
+
+def test_lineage_reads_the_observations_collector_not_the_context_sync() -> None:
+    from train_catboost_direct import LATEST_OBSERVATIONS_INGESTION
+
+    assert LATEST_OBSERVATIONS_INGESTION["source_name"] == "eq.pulso-transmi-stream"
+    assert LATEST_OBSERVATIONS_INGESTION["data_version"] == "not.is.null"
+
+
+def test_recent_performance_only_scores_the_active_models_predictions() -> None:
+    from run_forecast_cycle import recent_performance_params
+
+    params = recent_performance_params("2026-09-30T00:00:00+00:00", "model-123")
+    assert params["forecast_runs.model_version_id"] == "eq.model-123"
+    assert "forecast_runs!inner(model_version_id)" in params["select"]
+    assert "forecast_runs.model_version_id" not in recent_performance_params("2026-09-30T00:00:00+00:00", None)

@@ -28,11 +28,13 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
-from load_supabase import SupabaseLoader, download_object, load_dotenv, upload_object
+from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
     FEATURES,
     ENSEMBLE_WEIGHT,
+    LATEST_OBSERVATIONS_INGESTION,
+    MODEL_FORMAT,
     add_origin_features,
     git_commit,
     prediction_rows,
@@ -41,6 +43,10 @@ from train_catboost_direct import (
 )
 
 MODEL_BUCKET = "models"
+# Every retrain uploads a ~10 MB bundle and nothing ever removed old ones: with a retrain per
+# cycle that fills the 1 GB free Storage tier in a couple of days. Keep the active model plus
+# the most recent few (for rollback); MLflow's Model Registry keeps the full history anyway.
+MODELS_TO_KEEP = 5
 STALENESS_DAYS = 7
 PERFORMANCE_DEGRADATION_FACTOR = 1.15
 PERFORMANCE_MIN_SAMPLES = 20
@@ -134,16 +140,32 @@ def evaluate_recent_predictions(loader: SupabaseLoader, data: pd.DataFrame) -> N
             loader.patch("predictions", row.id, {"actual_demand": int(lookup.loc[key]), "evaluated_at": now.isoformat()})
 
 
-def recent_performance(loader: SupabaseLoader, horizons: list[int]) -> dict[int, dict[str, Any]]:
-    """WAPE per horizon from predictions evaluated within the last PERFORMANCE_WINDOW_DAYS.
+def recent_performance_params(since: str, model_version_id: str | None) -> dict[str, Any]:
+    """Only predictions made by the active model count against its own threshold.
+
+    Pooling every model's predictions meant a replaced model's errors kept firing
+    performance_drift for the whole 3-day window, retraining the new model every cycle no
+    matter how it did (seen after the late-September demand shift: 60+ retrains in a row).
+    A fresh model has no evaluated predictions yet, so it is kept until it has
+    PERFORMANCE_MIN_SAMPLES per horizon (two cycles) and then judged on its own record.
+    """
+    params: dict[str, Any] = {
+        "evaluated_at": f"gte.{since}", "select": "station_id,horizon_minutes,predicted_demand,raw_predicted_demand,actual_demand",
+    }
+    if model_version_id:
+        params["select"] += ",forecast_runs!inner(model_version_id)"
+        params["forecast_runs.model_version_id"] = f"eq.{model_version_id}"
+    return params
+
+
+def recent_performance(loader: SupabaseLoader, horizons: list[int], model_version_id: str | None = None) -> dict[int, dict[str, Any]]:
+    """WAPE per horizon from the active model's predictions evaluated within the last PERFORMANCE_WINDOW_DAYS.
 
     Scores the raw model output, so the bias correction can't hide model degradation from
     the retrain rule (the threshold it's compared to is the raw model's validation WAPE).
     """
     since = (pd.Timestamp.now(tz="UTC") - timedelta(days=PERFORMANCE_WINDOW_DAYS)).isoformat()
-    rows = loader.select("predictions", {
-        "evaluated_at": f"gte.{since}", "select": "station_id,horizon_minutes,predicted_demand,raw_predicted_demand,actual_demand",
-    })
+    rows = loader.select("predictions", recent_performance_params(since, model_version_id))
     if not rows:
         return {}
     frame = pd.DataFrame(rows)
@@ -225,13 +247,42 @@ def fetch_active_model(loader: SupabaseLoader) -> dict[str, Any] | None:
 
 def persist_model(url: str, key: str, version: str, models: dict[int, Any], horizons: list[int], metrics: dict[str, Any]) -> None:
     buffer = io.BytesIO()
-    joblib.dump({"models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics, "ensemble_weight": ENSEMBLE_WEIGHT}, buffer)
+    joblib.dump({
+        "models": models, "features": FEATURES, "horizons": horizons, "metrics": metrics,
+        "ensemble_weight": ENSEMBLE_WEIGHT, "model_format": MODEL_FORMAT,
+    }, buffer)
     upload_object(url, key, MODEL_BUCKET, f"{version}.joblib", buffer.getvalue())
+
+
+def models_to_prune(objects: list[dict[str, Any]], keep: set[str], keep_latest: int = MODELS_TO_KEEP) -> list[str]:
+    """Names of stored model bundles to delete: all but `keep` and the `keep_latest` newest."""
+    bundles = sorted(
+        (obj for obj in objects if str(obj.get("name", "")).endswith(".joblib")),
+        key=lambda obj: obj.get("created_at") or "", reverse=True,
+    )
+    newest = {obj["name"] for obj in bundles[:keep_latest]}
+    return [obj["name"] for obj in bundles if obj["name"] not in newest and obj["name"] not in keep]
+
+
+def prune_stored_models(url: str, key: str, active_version: str) -> None:
+    """Best effort: a failed cleanup must never block predicting or submitting."""
+    try:
+        stale = models_to_prune(list_objects(url, key, MODEL_BUCKET), {f"{active_version}.joblib"})
+        delete_objects(url, key, MODEL_BUCKET, stale)
+        if stale:
+            print(f"Pruned {len(stale)} old model bundles from Storage.")
+    except Exception as error:
+        print(f"Model storage cleanup skipped: {error}")
 
 
 def load_active_models(url: str, key: str, active_model: dict[str, Any]) -> dict[int, Any]:
     blob = download_object(url, key, MODEL_BUCKET, f"{active_model['version']}.joblib")
-    return joblib.load(io.BytesIO(blob))["models"]
+    bundle = joblib.load(io.BytesIO(blob))
+    # A bundle from before the level-ratio model predicts in different units with different
+    # features: raising here sends the caller down its "keep failed, fallback to retrain" path.
+    if bundle.get("model_format") != MODEL_FORMAT:
+        raise RuntimeError(f"active model format {bundle.get('model_format') or 'raw-v0'} != {MODEL_FORMAT}")
+    return bundle["models"]
 
 
 def retrain_and_persist(url: str, key: str, data: pd.DataFrame, horizons: list[int], cycle: dict, reason: str) -> tuple[dict[int, Any], str, str]:
@@ -240,6 +291,7 @@ def retrain_and_persist(url: str, key: str, data: pd.DataFrame, horizons: list[i
     if lineage is None:
         raise RuntimeError("record_lineage failed: Supabase credentials missing mid-run.")
     persist_model(url, key, lineage["version"], models, horizons, metrics)
+    prune_stored_models(url, key, lineage["version"])
     return models, lineage["model_version_id"], lineage["version"]
 
 
@@ -324,10 +376,10 @@ def main() -> None:
 
         active_model = fetch_active_model(loader)
         horizons = sorted({int(target["horizon_minutes"]) for target in cycle["targets"]})
-        performance = recent_performance(loader, horizons)
+        performance = recent_performance(loader, horizons, (active_model or {}).get("id"))
         drift_rows = compute_data_drift(data, active_model)
 
-        ingestions = loader.select("ingestion_runs", {"status": "eq.succeeded", "order": "finished_at.desc", "limit": 1})
+        ingestions = loader.select("ingestion_runs", LATEST_OBSERVATIONS_INGESTION)
         ingestion_run_id = ingestions[0]["id"] if ingestions else None
         if ingestion_run_id and drift_rows:
             loader.insert_many("drift_measurements", [

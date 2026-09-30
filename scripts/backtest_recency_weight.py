@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from train_baseline import ARTIFACTS_DIR, load_training_data, station_metrics
-from train_catboost_direct import FEATURES, add_origin_features, add_target_calendar, model
+from train_catboost_direct import RAW_FEATURES as FEATURES, add_origin_features, add_target_calendar, model
 from backtest_catboost_direct import build_folds
 
 HALF_LIVES_DAYS = [None, 30, 14, 7, 3]  # None = current behaviour, unweighted

@@ -113,6 +113,13 @@ Después instala el extra:
 python -m pip install -e '.[mlops]'
 ```
 
+**`data_version` en el lineage.** El reentreno toma el `data_version` de la última
+corrida *del collector de observaciones* (`source_name='pulso-transmi-stream'`) que trajo
+filas nuevas. Antes tomaba la última corrida exitosa de `ingestion_runs` de cualquier tipo.
+Desde que existe `sync_context.py`, que corre después del collector y no tiene
+`data_version`, eso dejaba `data_version=unknown` en todos los reentrenos y enlazaba la
+corrida de contexto en MLflow.
+
 `scripts/sync_stream_observations.py` (el collector) **no** loguea a MLflow —
 corre cada 10 minutos, y crear un run ahí en cada corrida ensuciaría el
 experimento con entradas casi siempre iguales. Supabase sigue siendo la
@@ -217,7 +224,13 @@ tocar nada. Si lo hay:
    3. `performance_drift: h{H} recent WAPE {x} > threshold {y}` — el WAPE
       reciente de algún horizonte supera en 15% el WAPE de validación *del
       propio modelo activo* (ese umbral se calculó una vez al entrenarlo, no
-      se recalcula en cada corrida).
+      se recalcula en cada corrida). El WAPE reciente se calcula solo con las
+      predicciones hechas por el modelo activo. Antes se mezclaban las de
+      todos los modelos de los últimos 3 días, así que los errores de un
+      modelo ya reemplazado seguían disparando reentrenos del nuevo en cada
+      ciclo. Un modelo recién entrenado se conserva hasta tener 20
+      predicciones evaluadas por horizonte (dos ciclos) y luego se juzga por
+      su propio desempeño.
    4. `data_drift: {feature} PSI={x} > {umbral}` — PSI de alguna variable
       supera su umbral: 0.25 (estándar de industria para "cambio
       significativo") para `demand`, `rain_forecast` y
@@ -255,7 +268,13 @@ tocar nada. Si lo hay:
    corridas de GitHub Actions (cada corrida es una VM nueva, sin disco
    persistente). `model_versions.is_active` marca cuál es el vigente; solo
    puede haber uno (índice único parcial). Si falla la descarga, cae a
-   reentrenar como salvavidas y lo dice en la razón registrada.
+   reentrenar como salvavidas y lo dice en la razón registrada. Lo mismo
+   ocurre si el modelo activo tiene un `model_format` anterior al actual.
+   Después de cada reentreno se borran del bucket los bundles viejos: se
+   conservan el activo y los 5 más recientes (`MODELS_TO_KEEP`). Antes no se
+   borraba nada y cada reentreno sumaba ~10 MB al plan gratuito de 1 GB. El
+   historial completo queda en el Model Registry de MLflow. Si la limpieza
+   falla, solo se imprime un aviso.
 5. **Predecir**: las 12 estaciones × horizontes que pida el ciclo (48 valores
    si pide los 4 horizontes), reusando `prediction_rows` de
    `train_catboost_direct.py`.
@@ -310,6 +329,12 @@ de esos intentos caiga dentro de la ventana. Como ambos scripts son
 idempotentes (el collector no duplica filas; el orquestador crea un
 `forecast_run` nuevo por corrida y su decisión no depende de cuántas
 corridas hubo antes), correr de más tampoco tiene costo más allá del cómputo.
+El workflow declara `concurrency: pulso-pipeline` sin cancelar la corrida en curso. El
+cron externo y el `schedule` de GitHub llegaron a disparar en el mismo minuto (29-sep
+20:40): las dos corridas reentrenaron y enviaron para el mismo ciclo, y una terminó con
+`submission=failed`. Ahora la segunda espera y, al arrancar, ve que el ciclo ya tiene un
+envío aceptado.
+
 Configura estos secrets en GitHub:
 
 - `PULSO_API_KEY`
