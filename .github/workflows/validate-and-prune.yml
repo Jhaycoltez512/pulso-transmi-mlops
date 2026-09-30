@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  PRUNE_APPLY: "false"
+  PRUNE_APPLY: "true"
 
 jobs:
   prune:
@@ -32,6 +32,7 @@ jobs:
         run: python scripts/prune_model_storage.py $([ "$PRUNE_APPLY" = "true" ] && echo --apply)
 
   backtest:
+    if: ${{ false }}  # already running from the previous push; don't start a second copy
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
