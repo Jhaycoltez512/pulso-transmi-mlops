@@ -25,8 +25,19 @@ def released_marker(row: dict[str, Any]) -> str:
     return row.get("released_at") or row["observed_at"]
 
 
+def as_instant(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp; 'Z' and '+00:00' must compare as the same instant."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def new_rows_since(rows: list[dict[str, Any]], last_released_at: str | None) -> list[dict[str, Any]]:
-    return rows if last_released_at is None else [row for row in rows if released_marker(row) > last_released_at]
+    # Compared as instants, not strings: the API returns "...Z" while Supabase hands the stored
+    # cursor back as "...+00:00", and "Z" sorts after "+" -- so the latest release kept being
+    # re-read as "new" on every run until the next one arrived (24 phantom rows per run).
+    if last_released_at is None:
+        return rows
+    cursor = as_instant(last_released_at)
+    return [row for row in rows if as_instant(released_marker(row)) > cursor]
 
 
 def version_for(rows: list[dict[str, Any]]) -> str | None:
