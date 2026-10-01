@@ -182,6 +182,20 @@ def test_recent_performance_only_scores_the_active_models_predictions() -> None:
     assert "forecast_runs.model_version_id" not in recent_performance_params("2026-09-30T00:00:00+00:00", None)
 
 
+def test_recent_performance_reads_every_page() -> None:
+    from load_supabase import SupabaseLoader
+    from run_forecast_cycle import recent_performance
+
+    # 2500 evaluated predictions (past the 1000-row cap): h15 is perfect, h60 always 50% off
+    rows = [{"id": i, "station_id": "07111", "horizon_minutes": 15 if i % 2 else 60, "predicted_demand": 100.0,
+             "raw_predicted_demand": 100.0 if i % 2 else 150.0, "actual_demand": 100} for i in range(2500)]
+    loader = SupabaseLoader.__new__(SupabaseLoader)
+    loader.select = lambda table, params: rows[params["offset"]:params["offset"] + params["limit"]]
+    result = recent_performance(loader, [15, 60], "model-123")
+    assert result[15]["samples"] + result[60]["samples"] == 2500
+    assert result[15]["wape"] == 0.0 and abs(result[60]["wape"] - 0.5) < 1e-9
+
+
 def _station_frame(days: int = 16, stations: tuple[str, ...] = ("05000", "05100")) -> pd.DataFrame:
     timestamps = pd.date_range("2026-09-01", periods=days * 96, freq="15min", tz="UTC")
     rng = np.random.default_rng(3)
