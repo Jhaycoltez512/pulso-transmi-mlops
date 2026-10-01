@@ -151,20 +151,22 @@ def combine(predictions: pd.DataFrame, weights: pd.DataFrame) -> np.ndarray:
 def production_adjust(
     data: pd.DataFrame, predictions: pd.DataFrame, history: pd.DataFrame, mode: str,
     window: timedelta, power: float, ensemble_on_adjusted: bool = True,
+    threshold: float = CAP_THRESHOLD, pool_stations: bool = False,
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Final values for one cycle.
 
     predictions: station_id, observed_at (cycle cutoff), target_at, horizon_minutes, model.
     history: already evaluated predictions -- station_id, horizon_minutes, target_at, model (the
     raw model output at the time) and actual. Returns the values to submit and, for logging, the
-    mean expert weights ({} when not ensembling).
+    mean expert weights ({} when not ensembling). pool_stations: one set of weights per horizon
+    across stations (more history per weight) instead of one per station and horizon.
     """
     frame = reference_inputs(data, predictions)
     model = frame["model"].to_numpy(dtype=float)
     horizons = frame["horizon_minutes"].to_numpy()
     if mode == "none":
         return np.clip(model, 0, None), {}
-    adjusted = adjust(frame, model, horizons)
+    adjusted = adjust(frame, model, horizons, threshold=threshold)
     if mode == "blend_cap":
         return adjusted, {}
     if mode != "ensemble":
@@ -175,11 +177,11 @@ def production_adjust(
     past = reference_inputs(data, past)
     past_model = past["model"].to_numpy(dtype=float)
     experts_past = pd.DataFrame({
-        "model": adjust(past, past_model, past["horizon_minutes"].to_numpy()) if ensemble_on_adjusted else past_model,
+        "model": adjust(past, past_model, past["horizon_minutes"].to_numpy(), threshold=threshold) if ensemble_on_adjusted else past_model,
         "persistence": past["persistence"].to_numpy(), "comparable": past["reference"].to_numpy(),
     })
-    keys = ["station_id", "horizon_minutes"]
-    hist = pd.concat([past[[*keys, "target_at"]].reset_index(drop=True), experts_past], axis=1)
+    keys = ["horizon_minutes"] if pool_stations else ["station_id", "horizon_minutes"]
+    hist = pd.concat([past[["station_id", "horizon_minutes", "target_at"]].reset_index(drop=True), experts_past], axis=1)
     hist["actual"] = past["actual"].to_numpy(dtype=float)
     weights = expert_weights(hist, frame[[*keys, "observed_at"]].reset_index(drop=True), keys, window, power)
     experts_now = pd.DataFrame({
