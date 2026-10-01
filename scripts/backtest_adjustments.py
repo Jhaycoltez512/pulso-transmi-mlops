@@ -22,25 +22,28 @@ from datetime import timedelta
 import numpy as np
 import pandas as pd
 
-from forecast_adjustments import adjust, blend_with_reference, cap_growth, combine, expert_weights, reference_inputs
+from forecast_adjustments import PERIODIC_EXPERTS, adjust, blend_with_reference, combine, expert_frame, expert_weights, reference_inputs
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import add_origin_features, add_target_calendar, fit_model, predict_demand
 
 ORIGIN_STEP_HOURS = 12
 DEFAULT_START = "2026-09-12T05:00:00Z"
 EVENT_START = pd.Timestamp("2026-09-18T05:00:00Z")
-CAP_THRESHOLDS = (1.5, 1.75, 2.0, 2.5, 3.0)
+CAP_THRESHOLDS = (2.5,)
+OLD = ("model", "persistence", "comparable")
+PERIODIC = ("model", *PERIODIC_EXPERTS)
+ALL = (*OLD, *PERIODIC_EXPERTS)
 ENSEMBLES = {
-    # name: (model expert column, pool by, window, power)
-    "ensamble est+h 6h p2": ("produccion", ["station_id"], timedelta(hours=6), 2.0),
-    "ensamble est+h 24h p2": ("produccion", ["station_id"], timedelta(hours=24), 2.0),
-    "ensamble global 3h p2": ("produccion", [], timedelta(hours=3), 2.0),
-    "ensamble global 6h p2": ("produccion", [], timedelta(hours=6), 2.0),
-    "ensamble global 6h p3": ("produccion", [], timedelta(hours=6), 3.0),
-    "ensamble(mt x2) est+h 6h p2": ("mezcla+tope x2.0", ["station_id"], timedelta(hours=6), 2.0),
-    "ensamble(mt x2) global 3h p2": ("mezcla+tope x2.0", [], timedelta(hours=3), 2.0),
-    "ensamble(mt x2) global 6h p2": ("mezcla+tope x2.0", [], timedelta(hours=6), 2.0),
-    "ensamble(mt x2) global 24h p2": ("mezcla+tope x2.0", [], timedelta(hours=24), 2.0),
+    # name: (experts, pool by, window, power)
+    "ens viejo global 6h p3": (OLD, [], timedelta(hours=6), 3.0),
+    "ens modelo+periodicos global 6h p3": (PERIODIC, [], timedelta(hours=6), 3.0),
+    "ens modelo+periodicos global 3h p3": (PERIODIC, [], timedelta(hours=3), 3.0),
+    "ens modelo+periodicos global 6h p6": (PERIODIC, [], timedelta(hours=6), 6.0),
+    "ens modelo+periodicos est+h 6h p3": (PERIODIC, ["station_id"], timedelta(hours=6), 3.0),
+    "ens todos global 6h p3": (ALL, [], timedelta(hours=6), 3.0),
+    "ens todos global 3h p3": (ALL, [], timedelta(hours=3), 3.0),
+    "ens todos est+h 6h p3": (ALL, ["station_id"], timedelta(hours=6), 3.0),
+    "ens modelo+lag4h global 6h p3": (("model", "lag_4h"), [], timedelta(hours=6), 3.0),
 }
 
 
@@ -69,25 +72,28 @@ def main() -> None:
     hourly = result.loc[result["observed_at"].dt.minute == 0].reset_index(drop=True)
 
     model = hourly["produccion"].to_numpy()
+    event = hourly["target_at"] >= EVENT_START
+    late = hourly["target_at"] >= EVENT_START + timedelta(hours=4)
     hourly["persistencia"] = hourly["persistence"]
     hourly["dia comparable"] = hourly["reference"]
     hourly["mezcla"] = blend_with_reference(model, hourly["reference"].to_numpy(), horizon)
-    hourly["tope"] = cap_growth(model, hourly["level_now"].to_numpy(), hourly["reference_level"].to_numpy(), hourly["reference"].to_numpy())
     for threshold in CAP_THRESHOLDS:
         hourly[f"mezcla+tope x{threshold}"] = adjust(hourly, model, horizon, threshold=threshold)
+    for name in PERIODIC_EXPERTS:
+        hourly[f"copia {name}"] = hourly[name]
 
-    for name, (model_column, keys, window, power) in ENSEMBLES.items():
-        experts = pd.DataFrame({"model": hourly[model_column], "persistence": hourly["persistence"], "comparable": hourly["reference"]})
-        history = pd.concat([hourly[["station_id", "target_at"]], experts], axis=1).assign(actual=hourly["target_demand"])
-        weights = expert_weights(history, hourly[["station_id", "observed_at"]], keys, window, power)
-        hourly[name] = combine(experts, weights)
-        if name == "ensamble(mt x2) global 6h p2":
-            event = hourly["target_at"] >= EVENT_START
-            print(f"pesos medios {name}: normal {weights.loc[~event.to_numpy()].mean().round(2).to_dict()} | evento {weights.loc[event.to_numpy()].mean().round(2).to_dict()}")
+    for name, (experts, keys, window, power) in ENSEMBLES.items():
+        table = expert_frame(hourly, model, experts)
+        history = pd.concat([hourly[["station_id", "target_at"]], table], axis=1).assign(actual=hourly["target_demand"])
+        weights = expert_weights(history, hourly[["station_id", "observed_at"]], keys, window, power, experts)
+        hourly[name] = combine(table, weights)
+        if name == "ens todos global 6h p3":
+            for label, part in (("normal", ~event), ("evento 05-09h", event & ~late), ("evento 09h+", late)):
+                print(f"pesos medios {name} [{label}]: {weights.loc[part.to_numpy()].mean().round(2).to_dict()}")
 
-    candidates = ["produccion", "persistencia", "dia comparable", "mezcla", "tope", *(f"mezcla+tope x{t}" for t in CAP_THRESHOLDS), *ENSEMBLES]
+    candidates = ["produccion", "persistencia", "dia comparable", "mezcla", *(f"mezcla+tope x{t}" for t in CAP_THRESHOLDS),
+                  *(f"copia {n}" for n in PERIODIC_EXPERTS), *ENSEMBLES]
     last_day = hourly["target_at"] > end - timedelta(days=1)
-    event = hourly["target_at"] >= EVENT_START
     rows = []
     for name in candidates:
         valid = hourly[name].notna()
@@ -97,6 +103,8 @@ def main() -> None:
             "ultimas 24h": accuracy(frame.loc[last_day[valid]], name),
             "sin evento": accuracy(frame.loc[~event[valid]], name),
             "evento": accuracy(frame.loc[event[valid]], name) if event[valid].any() else np.nan,
+            "evento 05-09h": accuracy(frame.loc[(event & ~late)[valid]], name) if (event & ~late)[valid].any() else np.nan,
+            "evento 09h+": accuracy(frame.loc[late[valid]], name) if late[valid].any() else np.nan,
         }
         for day, part in frame.groupby(frame["target_at"].dt.tz_convert("America/Bogota").dt.date):
             row[str(day)[5:]] = accuracy(part, name)

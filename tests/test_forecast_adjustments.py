@@ -7,7 +7,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from forecast_adjustments import (  # noqa: E402
-    blend_with_reference, cap_growth, combine, expert_weights, production_adjust, reference_inputs, reference_lag_days,
+    PERIODIC_EXPERTS, blend_with_reference, cap_growth, combine, expert_weights, production_adjust, reference_inputs,
+    reference_lag_days,
 )
 from load_supabase import SupabaseLoader  # noqa: E402
 
@@ -153,3 +154,35 @@ def test_select_all_pages_past_the_row_cap() -> None:
     assert loader.select_all("predictions", {"select": "id"}, order="id.asc") == rows
     assert [c["offset"] for c in calls] == [0, 1000, 2000]
     assert all(c["order"] == "id.asc" for c in calls)
+
+
+def test_reference_inputs_add_the_periodic_lags() -> None:
+    times = pd.date_range("2026-09-14T00:00:00Z", periods=4 * 96, freq="15min", tz="UTC")
+    data = pd.DataFrame({"station_id": "07111", "observed_at": times, "demand": np.arange(len(times), dtype=float)})
+    origin = pd.Timestamp("2026-09-16T17:00:00Z")
+    frame = pd.DataFrame({"station_id": ["07111"], "observed_at": [origin], "target_at": [origin + timedelta(minutes=45)]})
+    out = reference_inputs(data, frame).iloc[0]
+    index = {t: i for i, t in enumerate(times)}
+    assert out["lag_4h"] == index[origin + timedelta(minutes=45) - timedelta(hours=4)]
+    assert set(PERIODIC_EXPERTS) <= set(out.index)
+
+
+def test_ensemble_follows_a_periodic_regime() -> None:
+    # flat comparable day, then a 4h-periodic oscillation: the 4h copy is exact, the model is not
+    times = pd.date_range("2026-09-14T00:00:00Z", periods=4 * 96, freq="15min", tz="UTC")
+    demand = np.full(len(times), 100.0)
+    oscillating = times >= pd.Timestamp("2026-09-17T00:00:00Z")
+    demand[oscillating] = 100 * np.exp(1.5 * np.sin(2 * np.pi * np.arange(oscillating.sum()) / 16))
+    data = pd.DataFrame({"station_id": "07111", "observed_at": times, "demand": demand})
+    cutoff = times[-5]
+    target = cutoff + timedelta(minutes=60)
+    predictions = pd.DataFrame({"station_id": ["07111"], "observed_at": [cutoff], "target_at": [target], "horizon_minutes": [60], "model": [100.0]})
+    past_targets = [cutoff - timedelta(hours=k) for k in range(0, 6)]
+    actual = data.set_index("observed_at")["demand"]
+    history = pd.DataFrame({"station_id": "07111", "horizon_minutes": 60, "target_at": past_targets,
+                            "model": 100.0, "actual": [actual[t] for t in past_targets]})
+    experts = ("model", "persistence", "comparable", *PERIODIC_EXPERTS)
+    values, weights = production_adjust(data, predictions, history, "ensemble", timedelta(hours=6), 3.0,
+                                        ensemble_on_adjusted=False, pool_stations=True, experts=experts)
+    assert weights["lag_4h"] > 0.9
+    assert abs(values[0] - actual[target]) < 0.05 * actual[target]

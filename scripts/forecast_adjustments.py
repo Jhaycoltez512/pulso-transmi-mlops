@@ -18,7 +18,12 @@ This module holds the pieces that sit after the model:
 - growth cap: while a station is far above its comparable day, don't predict it climbing above
   max(current level, comparable day at the target);
 - adaptive expert ensemble: weight model / persistence / comparable day per station and horizon
-  by their recent errors, so the predictor that has been right lately leads.
+  by their recent errors, so the predictor that has been right lately leads;
+- periodic experts: demand P hours before the target (P in PERIOD_HOURS). From 2026-09-18
+  05:00 UTC the injected drift is a 4h-periodic oscillation (four station groups, one hour
+  apart, x5-11 peaks and x0.1-0.2 troughs vs the comparable day): copying the series from 4h
+  earlier scores ~90% there and ~36% on a normal day, so the recent-error weights pick it only
+  while such a regime lasts.
 """
 
 from __future__ import annotations
@@ -34,6 +39,8 @@ LEVEL_PERIODS = 4  # last hour, for "how far above normal is this station right 
 BLEND_ALPHA = 0.25  # weight on the comparable day at h60; scales linearly with the horizon
 CAP_THRESHOLD = 1.5  # current level / comparable-day level above which the growth cap applies
 EXPERTS = ("model", "persistence", "comparable")
+PERIOD_HOURS = (2, 3, 4, 5, 6)
+PERIODIC_EXPERTS = tuple(f"lag_{p}h" for p in PERIOD_HOURS)
 
 
 def reference_lag_days(times: pd.Series) -> np.ndarray:
@@ -73,6 +80,9 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
     out["level_now"] = _lookup(table, "level_now", out["station_id"], out["observed_at"])
     out["reference_level"] = _lookup(table, "level_now", out["station_id"], origin_ref)
     out["persistence"] = _lookup(table, "demand", out["station_id"], out["observed_at"])
+    target = pd.to_datetime(out["target_at"], utc=True)
+    for hours, name in zip(PERIOD_HOURS, PERIODIC_EXPERTS):
+        out[name] = _lookup(table, "demand", out["station_id"], target - timedelta(hours=hours))
     return out
 
 
@@ -103,7 +113,10 @@ def adjust(
     return np.clip(out, 0, None)
 
 
-def expert_weights(history: pd.DataFrame, queries: pd.DataFrame, keys: list[str], window: timedelta, power: float) -> pd.DataFrame:
+def expert_weights(
+    history: pd.DataFrame, queries: pd.DataFrame, keys: list[str], window: timedelta, power: float,
+    experts: tuple[str, ...] = EXPERTS,
+) -> pd.DataFrame:
     """Per-query expert weights from errors on targets already known at the query's origin.
 
     history: rows with keys, target_at, actual and one column per expert (its prediction).
@@ -114,11 +127,11 @@ def expert_weights(history: pd.DataFrame, queries: pd.DataFrame, keys: list[str]
     hist = history.copy()
     hist["target_at"] = _utc_ns(hist["target_at"]).array
     hist = hist.sort_values("target_at")
-    for expert in EXPERTS:
+    for expert in experts:
         hist[f"err_{expert}"] = (hist[expert] - hist["actual"]).abs()
         hist[f"n_{expert}"] = hist[f"err_{expert}"].notna().astype(float)
         hist[f"err_{expert}"] = hist[f"err_{expert}"].fillna(0.0)
-    cum_cols = [f"{p}_{e}" for e in EXPERTS for p in ("err", "n")]
+    cum_cols = [f"{p}_{e}" for e in experts for p in ("err", "n")]
     hist[cum_cols] = hist[cum_cols].astype(float)
     hist[cum_cols] = hist.groupby(keys, sort=False)[cum_cols].cumsum() if keys else hist[cum_cols].cumsum()
     hist = hist[[*keys, "target_at", *cum_cols]]
@@ -136,29 +149,39 @@ def expert_weights(history: pd.DataFrame, queries: pd.DataFrame, keys: list[str]
     end, start = as_of("_end"), as_of("_start")
     window_sums = end - start
     inv = {}
-    for expert in EXPERTS:
+    for expert in experts:
         count = window_sums[f"n_{expert}"].to_numpy()
         with np.errstate(divide="ignore", invalid="ignore"):
             mae = window_sums[f"err_{expert}"].to_numpy() / count
             inv[expert] = np.where(count > 0, np.power(np.maximum(mae, 1e-6), -power), 0.0)
     total = sum(inv.values())
-    weights = pd.DataFrame({e: np.where(total > 0, inv[e] / np.where(total > 0, total, 1), 1.0 if e == "model" else 0.0) for e in EXPERTS})
+    weights = pd.DataFrame({e: np.where(total > 0, inv[e] / np.where(total > 0, total, 1), 1.0 if e == "model" else 0.0) for e in experts})
     return weights
 
 
 def combine(predictions: pd.DataFrame, weights: pd.DataFrame) -> np.ndarray:
     """Weighted mean of the experts, renormalised over experts that have a prediction for the row."""
-    values = predictions[list(EXPERTS)].to_numpy(dtype=float)
-    w = weights[list(EXPERTS)].to_numpy(dtype=float) * ~np.isnan(values)
+    experts = list(weights.columns)
+    values = predictions[experts].to_numpy(dtype=float)
+    w = weights[experts].to_numpy(dtype=float) * ~np.isnan(values)
     norm = w.sum(axis=1)
     combined = np.nansum(np.nan_to_num(values) * w, axis=1) / np.where(norm > 0, norm, 1)
     return np.where(norm > 0, combined, predictions["model"].to_numpy(dtype=float))
 
 
+def expert_frame(frame: pd.DataFrame, model: np.ndarray, experts: tuple[str, ...]) -> pd.DataFrame:
+    """One column per expert from a reference_inputs() frame; "comparable" is its "reference"."""
+    columns = {"model": np.asarray(model, dtype=float)}
+    for expert in experts:
+        if expert != "model":
+            columns[expert] = frame["reference" if expert == "comparable" else expert].to_numpy(dtype=float)
+    return pd.DataFrame(columns)[list(experts)]
+
+
 def production_adjust(
     data: pd.DataFrame, predictions: pd.DataFrame, history: pd.DataFrame, mode: str,
     window: timedelta, power: float, ensemble_on_adjusted: bool = True,
-    threshold: float = CAP_THRESHOLD, pool_stations: bool = False,
+    threshold: float = CAP_THRESHOLD, pool_stations: bool = False, experts: tuple[str, ...] = EXPERTS,
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Final values for one cycle.
 
@@ -166,7 +189,8 @@ def production_adjust(
     history: already evaluated predictions -- station_id, horizon_minutes, target_at, model (the
     raw model output at the time) and actual. Returns the values to submit and, for logging, the
     mean expert weights ({} when not ensembling). pool_stations: one set of weights per horizon
-    across stations (more history per weight) instead of one per station and horizon.
+    across stations (more history per weight) instead of one per station and horizon. experts:
+    which predictors compete ("model" must be one of them; see EXPERTS and PERIODIC_EXPERTS).
     """
     frame = reference_inputs(data, predictions)
     model = frame["model"].to_numpy(dtype=float)
@@ -183,16 +207,10 @@ def production_adjust(
     past["observed_at"] = past["target_at"] - pd.to_timedelta(past["horizon_minutes"], unit="m")
     past = reference_inputs(data, past)
     past_model = past["model"].to_numpy(dtype=float)
-    experts_past = pd.DataFrame({
-        "model": adjust(past, past_model, past["horizon_minutes"].to_numpy(), threshold=threshold) if ensemble_on_adjusted else past_model,
-        "persistence": past["persistence"].to_numpy(), "comparable": past["reference"].to_numpy(),
-    })
+    experts_past = expert_frame(past, adjust(past, past_model, past["horizon_minutes"].to_numpy(), threshold=threshold) if ensemble_on_adjusted else past_model, experts)
     keys = ["horizon_minutes"] if pool_stations else ["station_id", "horizon_minutes"]
     hist = pd.concat([past[["station_id", "horizon_minutes", "target_at"]].reset_index(drop=True), experts_past], axis=1)
     hist["actual"] = past["actual"].to_numpy(dtype=float)
-    weights = expert_weights(hist, frame[[*keys, "observed_at"]].reset_index(drop=True), keys, window, power)
-    experts_now = pd.DataFrame({
-        "model": adjusted if ensemble_on_adjusted else model,
-        "persistence": frame["persistence"].to_numpy(), "comparable": frame["reference"].to_numpy(),
-    })
+    weights = expert_weights(hist, frame[[*keys, "observed_at"]].reset_index(drop=True), keys, window, power, experts)
+    experts_now = expert_frame(frame, adjusted if ensemble_on_adjusted else model, experts)
     return np.clip(combine(experts_now, weights), 0, None), weights.mean().round(3).to_dict()
