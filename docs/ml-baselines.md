@@ -307,7 +307,7 @@ periodo:
   evento nuevo no se puede anticipar desde la demanda pasada; haría falta el contexto de
   eventos (`event_intensity`), que la API no publica desde el 9-sep.
 
-### Adoptado: ensamble adaptativo de expertos después del modelo (1-oct)
+### Probado y revertido: ensamble adaptativo de expertos después del modelo (1-oct)
 
 Desde el 18-sep a las 05:00 UTC la competencia inyecta eventos: todo el sistema ×2.6–3.4
 frente al día anterior, y grupos de estaciones que pulsan juntos. El modelo normalizado por
@@ -374,6 +374,20 @@ historial del experto "modelo".
 Caveat: el tramo de evento es un solo episodio de ~6 h, así que la ganancia en evento tiene
 mucha incertidumbre. Lo robusto es que en ~6 días de horas normales el ensamble no empeora a
 ningún horizonte.
+
+**Revertido el mismo 1-oct** (`DEFAULT_ADJUSTMENT="none"`). En vivo, el ensamble perdió
+contra el modelo solo en sus dos primeros ciclos evaluados:
+
+| Corte (simulado) | Ensamble | Modelo solo | Persistencia | Día comparable |
+|---|---|---|---|---|
+| 18-sep 13:00 | 55.5 | 60.8 | 45.1 | 37.8 |
+| 18-sep 14:00 | 58.6 | 60.5 | 47.4 | 38.7 |
+
+En los 8 cruces de horizonte y ciclo quedó igual o peor que el modelo. Después de las 13:00
+las estaciones oscilan con fuerza (06000 cae de 1496 a 263 en una hora, 05000 sube de 786 a
+1475), un régimen que el periodo del backtest no contenía. Los pesos de las 6 h previas
+empujaban hacia la persistencia justo cuando el modelo tenía la dirección correcta. El código
+sigue disponible con `PULSO_ADJUSTMENT=ensemble` o `blend_cap`.
 
 ## Backtest walk-forward de CatBoost
 

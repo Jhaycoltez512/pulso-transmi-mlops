@@ -91,7 +91,11 @@ STATION_DRIFT_PREFIX = "station_level:"
 # the model alone, better at every horizon both in ordinary hours and in the injected event.
 # "blend_cap" (mild comparable-day blend + growth cap x2.5, 83.4%) and "none" stay available
 # through PULSO_ADJUSTMENT.
-DEFAULT_ADJUSTMENT = "ensemble"
+# Back to "none" on 1-oct: live, the ensemble lost to the model alone in its first two cycles
+# (57.0% vs 60.7% over 96 predictions, worse at every horizon) -- after 13:00 UTC on 18-sep the
+# stations swing in ways the backtest period never showed, and the 6h weights pull towards
+# persistence just when the model has the direction right. Kept selectable via PULSO_ADJUSTMENT.
+DEFAULT_ADJUSTMENT = "none"
 ENSEMBLE_WINDOW = timedelta(hours=6)
 ENSEMBLE_POWER = 3.0
 ENSEMBLE_POOL_STATIONS = True

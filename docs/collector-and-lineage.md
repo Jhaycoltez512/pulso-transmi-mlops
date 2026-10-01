@@ -323,7 +323,9 @@ tocar nada. Si lo hay:
    por nivel no mejoró en el periodo real de cambios, porque el factor global
    mezcla estaciones que suben con estaciones que bajan (ver
    `docs/ml-baselines.md`).
-   **Ensamble adaptativo** (por defecto desde el 1-oct): la predicción final combina tres
+
+   **Ensamble adaptativo** (opcional; probado el 1-oct y desactivado por defecto porque en vivo
+   rindió peor que el modelo solo): con `PULSO_ADJUSTMENT=ensemble`, la predicción final combina tres
    expertos:
 
    - el modelo;
@@ -334,8 +336,8 @@ tocar nada. Si lo hay:
    El peso de cada uno es inverso a su error medio^3 sobre las predicciones ya evaluadas de
    las últimas 6 h, por horizonte y agrupando todas las estaciones
    (`scripts/forecast_adjustments.py`, leídas con paginación de `predictions`). Sin historial
-   se envía el modelo solo. La variable `PULSO_ADJUSTMENT` lo cambia: `blend_cap` aplica
-   mezcla suave + tope de crecimiento, y `none` envía el modelo sin ajustar. El log del ciclo
+   se envía el modelo solo. Otros valores de `PULSO_ADJUSTMENT`: `blend_cap` aplica mezcla
+   suave + tope de crecimiento, y `none` (por defecto) envía el modelo sin ajustar. El log del ciclo
    imprime `Adjustment: mode=... mean_weights=...`. `raw_predicted_demand` guarda siempre la
    salida pura del modelo.
 6. **Enviar**: valida el payload localmente (mismo `validate()` que usa la
@@ -391,7 +393,7 @@ Y estas variables (`vars`, no secrets):
 - `PULSO_SUBMIT_ENABLED` (opcional; `false` para desactivar el envío real)
 - `PULSO_BIAS_CORRECTION` (opcional; `true` para aplicar la corrección de sesgo
   global; por defecto solo se mide)
-- `PULSO_ADJUSTMENT` (opcional; `ensemble` por defecto, `blend_cap` o `none`)
+- `PULSO_ADJUSTMENT` (opcional; `none` por defecto, `ensemble` o `blend_cap`)
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.
