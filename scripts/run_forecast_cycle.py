@@ -156,9 +156,9 @@ def population_stability_index(reference: np.ndarray, recent: np.ndarray, bins: 
 def evaluate_recent_predictions(loader: SupabaseLoader, data: pd.DataFrame) -> None:
     """Backfill actual_demand for past predictions whose target_at now has a real observation."""
     now = pd.Timestamp.now(tz="UTC")
-    pending = loader.select("predictions", {
+    pending = loader.select_all("predictions", {
         "actual_demand": "is.null", "target_at": f"lte.{now.isoformat()}", "select": "id,station_id,target_at",
-    })
+    }, order="id.asc")
     if not pending:
         return
     pending_frame = pd.DataFrame(pending)
@@ -195,7 +195,8 @@ def recent_performance(loader: SupabaseLoader, horizons: list[int], model_versio
     the retrain rule (the threshold it's compared to is the raw model's validation WAPE).
     """
     since = (pd.Timestamp.now(tz="UTC") - timedelta(days=PERFORMANCE_WINDOW_DAYS)).isoformat()
-    rows = loader.select("predictions", recent_performance_params(since, model_version_id))
+    # 3 days x 48 predictions per cycle passes PostgREST's 1000-row cap within a day: page it.
+    rows = loader.select_all("predictions", recent_performance_params(since, model_version_id), order="id.asc")
     if not rows:
         return {}
     frame = pd.DataFrame(rows)
