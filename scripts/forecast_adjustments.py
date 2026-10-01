@@ -42,10 +42,15 @@ def reference_lag_days(times: pd.Series) -> np.ndarray:
     return np.select([weekday == 0, weekday >= 5], [3, 7], default=1)
 
 
+def _utc_ns(values) -> pd.Series:
+    """Timestamps as datetime64[ns, UTC]: merges refuse keys of different resolution ([s] vs [ns])."""
+    return pd.Series(pd.to_datetime(np.asarray(values), utc=True)).astype("datetime64[ns, UTC]")
+
+
 def _lookup(table: pd.DataFrame, value: str, stations: pd.Series, times: pd.Series) -> np.ndarray:
-    keys = pd.DataFrame({"station_id": np.asarray(stations), "observed_at": np.asarray(times)})
-    keys["observed_at"] = pd.to_datetime(keys["observed_at"], utc=True)
-    return keys.merge(table[["station_id", "observed_at", value]], on=["station_id", "observed_at"], how="left")[value].to_numpy(dtype=float)
+    keys = pd.DataFrame({"station_id": np.asarray(stations), "observed_at": _utc_ns(times)})
+    right = table[["station_id", "observed_at", value]].assign(observed_at=_utc_ns(table["observed_at"]).array)
+    return keys.merge(right, on=["station_id", "observed_at"], how="left")[value].to_numpy(dtype=float)
 
 
 def level_table(data: pd.DataFrame) -> pd.DataFrame:
@@ -106,7 +111,9 @@ def expert_weights(history: pd.DataFrame, queries: pd.DataFrame, keys: list[str]
     (origin - window, origin] count. Weight_i = MAE_i^-power / sum; experts with no history get 0;
     if nothing is known yet, the model gets all the weight.
     """
-    hist = history.sort_values("target_at").copy()
+    hist = history.copy()
+    hist["target_at"] = _utc_ns(hist["target_at"]).array
+    hist = hist.sort_values("target_at")
     for expert in EXPERTS:
         hist[f"err_{expert}"] = (hist[expert] - hist["actual"]).abs()
         hist[f"n_{expert}"] = hist[f"err_{expert}"].notna().astype(float)
@@ -118,7 +125,7 @@ def expert_weights(history: pd.DataFrame, queries: pd.DataFrame, keys: list[str]
 
     q = queries[[*keys, "observed_at"]].copy()
     q["_row"] = np.arange(len(q))
-    q["_end"] = pd.to_datetime(q["observed_at"], utc=True)
+    q["_end"] = _utc_ns(q["observed_at"]).array
     q["_start"] = q["_end"] - window
 
     def as_of(column: str) -> pd.DataFrame:

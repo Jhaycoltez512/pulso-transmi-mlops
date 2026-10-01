@@ -127,6 +127,19 @@ def test_production_ensemble_pooled_over_stations_uses_every_station_history() -
     assert alone.tolist() == [200.0]
 
 
+def test_production_adjust_mixes_timestamp_resolutions() -> None:
+    # live cycle: cutoff parsed at second resolution, observations and history at nanoseconds
+    data, predictions, history = _cycle(model_value=200.0)
+    data["observed_at"] = data["observed_at"].astype("datetime64[ns, UTC]")
+    predictions["observed_at"] = predictions["observed_at"].astype("datetime64[s, UTC]")
+    predictions["target_at"] = predictions["target_at"].astype("datetime64[ns, UTC]")
+    history["target_at"] = history["target_at"].dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    for mode in ("blend_cap", "ensemble"):
+        values, _ = production_adjust(data, predictions, history, mode, timedelta(hours=6), 3.0,
+                                      ensemble_on_adjusted=False, pool_stations=True)
+        assert np.isfinite(values).all()
+
+
 def test_select_all_pages_past_the_row_cap() -> None:
     loader = SupabaseLoader.__new__(SupabaseLoader)
     rows = [{"id": i} for i in range(2500)]
