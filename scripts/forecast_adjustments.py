@@ -85,11 +85,14 @@ def cap_growth(prediction: np.ndarray, level_now: np.ndarray, reference_level: n
     return np.where(inflated & ~np.isnan(ceiling), np.minimum(prediction, ceiling), prediction)
 
 
-def adjust(frame: pd.DataFrame, prediction: np.ndarray, horizon_minutes: np.ndarray | int, blend: bool = True, cap: bool = True) -> np.ndarray:
+def adjust(
+    frame: pd.DataFrame, prediction: np.ndarray, horizon_minutes: np.ndarray | int,
+    blend: bool = True, cap: bool = True, threshold: float = CAP_THRESHOLD,
+) -> np.ndarray:
     """Production adjustment on top of the model: optional growth cap, then the mild blend."""
     out = np.asarray(prediction, dtype=float)
     if cap:
-        out = cap_growth(out, frame["level_now"].to_numpy(), frame["reference_level"].to_numpy(), frame["reference"].to_numpy())
+        out = cap_growth(out, frame["level_now"].to_numpy(), frame["reference_level"].to_numpy(), frame["reference"].to_numpy(), threshold)
     if blend:
         out = blend_with_reference(out, frame["reference"].to_numpy(), horizon_minutes)
     return np.clip(out, 0, None)
@@ -143,3 +146,44 @@ def combine(predictions: pd.DataFrame, weights: pd.DataFrame) -> np.ndarray:
     norm = w.sum(axis=1)
     combined = np.nansum(np.nan_to_num(values) * w, axis=1) / np.where(norm > 0, norm, 1)
     return np.where(norm > 0, combined, predictions["model"].to_numpy(dtype=float))
+
+
+def production_adjust(
+    data: pd.DataFrame, predictions: pd.DataFrame, history: pd.DataFrame, mode: str,
+    window: timedelta, power: float, ensemble_on_adjusted: bool = True,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Final values for one cycle.
+
+    predictions: station_id, observed_at (cycle cutoff), target_at, horizon_minutes, model.
+    history: already evaluated predictions -- station_id, horizon_minutes, target_at, model (the
+    raw model output at the time) and actual. Returns the values to submit and, for logging, the
+    mean expert weights ({} when not ensembling).
+    """
+    frame = reference_inputs(data, predictions)
+    model = frame["model"].to_numpy(dtype=float)
+    horizons = frame["horizon_minutes"].to_numpy()
+    if mode == "none":
+        return np.clip(model, 0, None), {}
+    adjusted = adjust(frame, model, horizons)
+    if mode == "blend_cap":
+        return adjusted, {}
+    if mode != "ensemble":
+        raise ValueError(f"unknown adjustment mode {mode!r}")
+    past = history.copy()
+    past["target_at"] = pd.to_datetime(past["target_at"], utc=True)
+    past["observed_at"] = past["target_at"] - pd.to_timedelta(past["horizon_minutes"], unit="m")
+    past = reference_inputs(data, past)
+    past_model = past["model"].to_numpy(dtype=float)
+    experts_past = pd.DataFrame({
+        "model": adjust(past, past_model, past["horizon_minutes"].to_numpy()) if ensemble_on_adjusted else past_model,
+        "persistence": past["persistence"].to_numpy(), "comparable": past["reference"].to_numpy(),
+    })
+    keys = ["station_id", "horizon_minutes"]
+    hist = pd.concat([past[[*keys, "target_at"]].reset_index(drop=True), experts_past], axis=1)
+    hist["actual"] = past["actual"].to_numpy(dtype=float)
+    weights = expert_weights(hist, frame[[*keys, "observed_at"]].reset_index(drop=True), keys, window, power)
+    experts_now = pd.DataFrame({
+        "model": adjusted if ensemble_on_adjusted else model,
+        "persistence": frame["persistence"].to_numpy(), "comparable": frame["reference"].to_numpy(),
+    })
+    return np.clip(combine(experts_now, weights), 0, None), weights.mean().round(3).to_dict()

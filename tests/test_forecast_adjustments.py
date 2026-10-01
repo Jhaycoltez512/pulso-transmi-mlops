@@ -7,8 +7,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 from forecast_adjustments import (  # noqa: E402
-    blend_with_reference, cap_growth, combine, expert_weights, reference_inputs, reference_lag_days,
+    blend_with_reference, cap_growth, combine, expert_weights, production_adjust, reference_inputs, reference_lag_days,
 )
+from load_supabase import SupabaseLoader  # noqa: E402
 
 
 def test_reference_day_keeps_weekdays_and_weekends_apart() -> None:
@@ -76,3 +77,52 @@ def test_combine_renormalises_over_available_experts() -> None:
     predictions = pd.DataFrame({"model": [100.0], "persistence": [200.0], "comparable": [np.nan]})
     weights = pd.DataFrame({"model": [0.25], "persistence": [0.25], "comparable": [0.5]})
     assert combine(predictions, weights).tolist() == [150.0]
+
+
+def _cycle(model_value: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Flat station at 100 for 4 days; the history says persistence was exact and the model 50 off."""
+    times = pd.date_range("2026-09-14T00:00:00Z", periods=4 * 96, freq="15min", tz="UTC")
+    data = pd.DataFrame({"station_id": "07111", "observed_at": times, "demand": 100.0})
+    cutoff = times[-1]
+    predictions = pd.DataFrame({
+        "station_id": ["07111"], "observed_at": [cutoff], "target_at": [cutoff + timedelta(minutes=60)],
+        "horizon_minutes": [60], "model": [model_value],
+    })
+    targets = [cutoff - timedelta(hours=h) for h in range(1, 6)]
+    history = pd.DataFrame({"station_id": "07111", "horizon_minutes": 60, "target_at": targets, "model": 150.0, "actual": 100.0})
+    return data, predictions, history
+
+
+def test_production_adjust_modes() -> None:
+    data, predictions, history = _cycle(model_value=200.0)
+    none, _ = production_adjust(data, predictions, history, "none", timedelta(hours=24), 2.0)
+    assert none.tolist() == [200.0]
+    # comparable day is 100 at the target: h60 blend puts a quarter of the weight on it
+    blended, _ = production_adjust(data, predictions, history, "blend_cap", timedelta(hours=24), 2.0)
+    assert np.allclose(blended, [175.0])
+    # persistence and comparable day were exact lately, the model wasn't: the ensemble follows them
+    ensembled, weights = production_adjust(data, predictions, history, "ensemble", timedelta(hours=24), 2.0)
+    assert abs(ensembled[0] - 100.0) < 1.0
+    assert weights["model"] < 0.01
+
+
+def test_production_adjust_without_history_submits_the_adjusted_model() -> None:
+    data, predictions, history = _cycle(model_value=200.0)
+    ensembled, weights = production_adjust(data, predictions, history.iloc[0:0], "ensemble", timedelta(hours=24), 2.0)
+    assert np.allclose(ensembled, [175.0])
+    assert weights["model"] == 1.0
+
+
+def test_select_all_pages_past_the_row_cap() -> None:
+    loader = SupabaseLoader.__new__(SupabaseLoader)
+    rows = [{"id": i} for i in range(2500)]
+    calls = []
+
+    def fake_select(table, params):
+        calls.append(params)
+        return rows[params["offset"]:params["offset"] + params["limit"]]
+
+    loader.select = fake_select
+    assert loader.select_all("predictions", {"select": "id"}, order="id.asc") == rows
+    assert [c["offset"] for c in calls] == [0, 1000, 2000]
+    assert all(c["order"] == "id.asc" for c in calls)

@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
+from forecast_adjustments import production_adjust
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
@@ -83,6 +84,13 @@ PER_TIMESTAMP_FEATURES = {"rain_forecast", "temperature_forecast", "event_intens
 STATION_DRIFT_WINDOW = timedelta(hours=24)
 STATION_DRIFT_THRESHOLD = float(np.log(1.5))
 STATION_DRIFT_PREFIX = "station_level:"
+# Post-model adjustment (scripts/forecast_adjustments.py), chosen with
+# scripts/backtest_adjustments.py on real data: "none" submits the model as is, "blend_cap" adds
+# the mild comparable-day blend and the growth cap, "ensemble" weights model / persistence /
+# comparable day per station and horizon by recent inverse error. Override with PULSO_ADJUSTMENT.
+DEFAULT_ADJUSTMENT = "none"
+ENSEMBLE_WINDOW = timedelta(hours=24)
+ENSEMBLE_POWER = 2.0
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
 BIAS_WINDOW_HOURS = 4
@@ -466,6 +474,31 @@ def main() -> None:
         predictions = prediction_rows(data, cycle, models)
 
         cutoff = pd.Timestamp(cycle["data_cutoff"])
+        horizon_lookup = target_horizons(cycle)
+        adjustment = os.environ.get("PULSO_ADJUSTMENT", "").strip().lower() or DEFAULT_ADJUSTMENT
+        model_values = {(p["station_id"], p["target_at"]): p["value"] for p in predictions}
+        if adjustment != "none":
+            history = loader.select_all("predictions", {
+                "select": "station_id,horizon_minutes,target_at,raw_predicted_demand,predicted_demand,actual_demand",
+                "actual_demand": "not.is.null",
+                "target_at": [f"gt.{(cutoff - ENSEMBLE_WINDOW).isoformat()}", f"lte.{cutoff.isoformat()}"],
+            }, order="id.asc")
+            history_frame = pd.DataFrame(history, columns=["station_id", "horizon_minutes", "target_at", "raw_predicted_demand", "predicted_demand", "actual_demand"])
+            history_frame = (
+                history_frame.assign(model=history_frame["raw_predicted_demand"].fillna(history_frame["predicted_demand"]), actual=history_frame["actual_demand"])
+                .groupby(["station_id", "horizon_minutes", "target_at"], as_index=False)[["model", "actual"]].mean()
+            )
+            frame = pd.DataFrame({
+                "station_id": [p["station_id"] for p in predictions], "observed_at": cutoff,
+                "target_at": pd.to_datetime([p["target_at"] for p in predictions], utc=True),
+                "horizon_minutes": [horizon_lookup[(p["station_id"], p["target_at"])] for p in predictions],
+                "model": [p["value"] for p in predictions],
+            })
+            values, mean_weights = production_adjust(data, frame, history_frame, adjustment, ENSEMBLE_WINDOW, ENSEMBLE_POWER)
+            for p, value in zip(predictions, values, strict=True):
+                p["value"] = float(value)
+            print(f"Adjustment: mode={adjustment} history_rows={len(history_frame)} mean_weights={mean_weights}")
+
         # Off unless PULSO_BIAS_CORRECTION=true: with the level-normalised model it no longer
         # helped on the real post-change period (the pooled factor mixes stations moving in
         # opposite directions). The factor is still measured and logged below for monitoring.
@@ -476,7 +509,9 @@ def main() -> None:
         })
         factor, samples = bias_factor(recent)
         scale = bias_scale(factor) if correction_enabled else 1.0
-        raw_values = {(p["station_id"], p["target_at"]): p["value"] for p in predictions}
+        # raw_predicted_demand keeps the model's own output (before adjustment and correction): it is
+        # what performance_drift and the bias factor measure, and the "model" expert's history.
+        raw_values = model_values
         for p in predictions:
             p["value"] = float(p["value"] * scale)
         print(f"Bias correction: factor={factor if factor is None else round(factor, 4)} samples={samples} scale={scale:.4f} enabled={correction_enabled}")
@@ -488,7 +523,6 @@ def main() -> None:
                 "details": {"factor": factor, "applied_scale": scale, "samples": samples, "alpha": BIAS_ALPHA, "enabled": correction_enabled},
             })
 
-        horizon_lookup = target_horizons(cycle)
         loader.insert_many("predictions", [
             {
                 "forecast_run_id": forecast_run_id, "station_id": p["station_id"], "target_at": p["target_at"],

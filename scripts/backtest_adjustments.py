@@ -29,16 +29,18 @@ from train_catboost_direct import add_origin_features, add_target_calendar, fit_
 ORIGIN_STEP_HOURS = 12
 DEFAULT_START = "2026-09-12T05:00:00Z"
 EVENT_START = pd.Timestamp("2026-09-18T05:00:00Z")
+CAP_THRESHOLDS = (1.5, 1.75, 2.0, 2.5, 3.0)
 ENSEMBLES = {
     # name: (model expert column, pool by, window, power)
-    "ensamble est+h 6h p1": ("produccion", ["station_id"], timedelta(hours=6), 1.0),
     "ensamble est+h 6h p2": ("produccion", ["station_id"], timedelta(hours=6), 2.0),
-    "ensamble est+h 24h p1": ("produccion", ["station_id"], timedelta(hours=24), 1.0),
     "ensamble est+h 24h p2": ("produccion", ["station_id"], timedelta(hours=24), 2.0),
+    "ensamble global 3h p2": ("produccion", [], timedelta(hours=3), 2.0),
     "ensamble global 6h p2": ("produccion", [], timedelta(hours=6), 2.0),
-    "ensamble global 24h p2": ("produccion", [], timedelta(hours=24), 2.0),
-    "ensamble(mezcla+tope) est+h 6h p2": ("mezcla+tope", ["station_id"], timedelta(hours=6), 2.0),
-    "ensamble(mezcla+tope) est+h 24h p2": ("mezcla+tope", ["station_id"], timedelta(hours=24), 2.0),
+    "ensamble global 6h p3": ("produccion", [], timedelta(hours=6), 3.0),
+    "ensamble(mt x2) est+h 6h p2": ("mezcla+tope x2.0", ["station_id"], timedelta(hours=6), 2.0),
+    "ensamble(mt x2) global 3h p2": ("mezcla+tope x2.0", [], timedelta(hours=3), 2.0),
+    "ensamble(mt x2) global 6h p2": ("mezcla+tope x2.0", [], timedelta(hours=6), 2.0),
+    "ensamble(mt x2) global 24h p2": ("mezcla+tope x2.0", [], timedelta(hours=24), 2.0),
 }
 
 
@@ -71,21 +73,19 @@ def main() -> None:
     hourly["dia comparable"] = hourly["reference"]
     hourly["mezcla"] = blend_with_reference(model, hourly["reference"].to_numpy(), horizon)
     hourly["tope"] = cap_growth(model, hourly["level_now"].to_numpy(), hourly["reference_level"].to_numpy(), hourly["reference"].to_numpy())
-    hourly["mezcla+tope"] = adjust(hourly, model, horizon)
-    hourly["mezcla+tope x2"] = blend_with_reference(
-        cap_growth(model, hourly["level_now"].to_numpy(), hourly["reference_level"].to_numpy(), hourly["reference"].to_numpy(), threshold=2.0),
-        hourly["reference"].to_numpy(), horizon)
+    for threshold in CAP_THRESHOLDS:
+        hourly[f"mezcla+tope x{threshold}"] = adjust(hourly, model, horizon, threshold=threshold)
 
     for name, (model_column, keys, window, power) in ENSEMBLES.items():
         experts = pd.DataFrame({"model": hourly[model_column], "persistence": hourly["persistence"], "comparable": hourly["reference"]})
         history = pd.concat([hourly[["station_id", "target_at"]], experts], axis=1).assign(actual=hourly["target_demand"])
         weights = expert_weights(history, hourly[["station_id", "observed_at"]], keys, window, power)
         hourly[name] = combine(experts, weights)
-        if name == "ensamble est+h 24h p2":
+        if name == "ensamble(mt x2) global 6h p2":
             event = hourly["target_at"] >= EVENT_START
             print(f"pesos medios {name}: normal {weights.loc[~event.to_numpy()].mean().round(2).to_dict()} | evento {weights.loc[event.to_numpy()].mean().round(2).to_dict()}")
 
-    candidates = ["produccion", "persistencia", "dia comparable", "mezcla", "tope", "mezcla+tope", "mezcla+tope x2", *ENSEMBLES]
+    candidates = ["produccion", "persistencia", "dia comparable", "mezcla", "tope", *(f"mezcla+tope x{t}" for t in CAP_THRESHOLDS), *ENSEMBLES]
     last_day = hourly["target_at"] > end - timedelta(days=1)
     event = hourly["target_at"] >= EVENT_START
     rows = []
