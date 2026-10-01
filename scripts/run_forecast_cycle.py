@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
-from forecast_adjustments import production_adjust
+from forecast_adjustments import EXPERTS, PERIODIC_EXPERTS, production_adjust
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
@@ -85,21 +85,20 @@ STATION_DRIFT_WINDOW = timedelta(hours=24)
 STATION_DRIFT_THRESHOLD = float(np.log(1.5))
 STATION_DRIFT_PREFIX = "station_level:"
 # Post-model adjustment (scripts/forecast_adjustments.py), chosen with
-# scripts/backtest_adjustments.py on real data (12-18 sep, walk-forward, hourly origins):
-# "ensemble" weights model / persistence / comparable day by their inverse error^3 over the
-# last 6h, one set of weights per horizon across stations -- mean accuracy 83.6% vs 81.9% for
-# the model alone, better at every horizon both in ordinary hours and in the injected event.
-# "blend_cap" (mild comparable-day blend + growth cap x2.5, 83.4%) and "none" stay available
-# through PULSO_ADJUSTMENT.
-# Back to "none" on 1-oct: live, the ensemble lost to the model alone in its first two cycles
-# (57.0% vs 60.7% over 96 predictions, worse at every horizon) -- after 13:00 UTC on 18-sep the
-# stations swing in ways the backtest period never showed, and the 6h weights pull towards
-# persistence just when the model has the direction right. Kept selectable via PULSO_ADJUSTMENT.
-DEFAULT_ADJUSTMENT = "none"
-ENSEMBLE_WINDOW = timedelta(hours=6)
-ENSEMBLE_POWER = 3.0
+# scripts/backtest_adjustments.py on real data (12-18 sep, walk-forward, hourly origins) and a
+# replay on the live predictions: "ensemble" weights the model, persistence, the comparable day
+# and copies of the series 2-6h back by inverse error^6 over the last 4h, one set of weights per
+# horizon across stations. From 18-sep 05:00 the injected drift is a 4h-periodic oscillation the
+# model can't learn; once one period has been seen the 4h copy takes over (~90% vs ~60% for the
+# model on the live cycles), and on normal days the model keeps ~all the weight (85.8% -> 86.0%).
+# The first version (model / persistence / comparable day only, 6h, p3) lost to the model live
+# and was reverted. "blend_cap" and "none" stay available through PULSO_ADJUSTMENT.
+DEFAULT_ADJUSTMENT = "ensemble"
+ENSEMBLE_WINDOW = timedelta(hours=4)
+ENSEMBLE_POWER = 6.0
 ENSEMBLE_POOL_STATIONS = True
 ENSEMBLE_ON_ADJUSTED = False
+ENSEMBLE_EXPERTS = (*EXPERTS, *PERIODIC_EXPERTS)
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
@@ -507,6 +506,7 @@ def main() -> None:
             values, mean_weights = production_adjust(
                 data, frame, history_frame, adjustment, ENSEMBLE_WINDOW, ENSEMBLE_POWER,
                 ensemble_on_adjusted=ENSEMBLE_ON_ADJUSTED, threshold=ADJUST_CAP_THRESHOLD, pool_stations=ENSEMBLE_POOL_STATIONS,
+                experts=ENSEMBLE_EXPERTS,
             )
             for p, value in zip(predictions, values, strict=True):
                 p["value"] = float(value)
