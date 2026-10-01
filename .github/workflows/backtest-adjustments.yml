@@ -6,7 +6,7 @@ name: backtest-adjustments
 on:
   push:
     branches: [claude/intelligent-bell-np1lix]
-    paths: [.github/workflows/backtest-adjustments.yml]
+    paths: [.github/workflows/backtest-adjustments.yml, scripts/backtest_adjustments.py]
 
 permissions:
   contents: read
