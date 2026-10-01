@@ -324,22 +324,27 @@ tocar nada. Si lo hay:
    mezcla estaciones que suben con estaciones que bajan (ver
    `docs/ml-baselines.md`).
 
-   **Ensamble adaptativo** (opcional; probado el 1-oct y desactivado por defecto porque en vivo
-   rindió peor que el modelo solo): con `PULSO_ADJUSTMENT=ensemble`, la predicción final combina tres
-   expertos:
+   **Ensamble adaptativo** (por defecto desde el 1-oct, segunda versión): la predicción final
+   combina varios expertos:
 
    - el modelo;
-   - la persistencia (demanda en el corte);
+   - la persistencia (la demanda en el corte);
    - el día comparable a la misma hora (Mar–Vie: el día anterior; Lun: el viernes; fines de
-     semana: hace una semana).
+     semana: hace una semana);
+   - copias de la serie de 2, 3, 4, 5 y 6 h antes del objetivo.
 
-   El peso de cada uno es inverso a su error medio^3 sobre las predicciones ya evaluadas de
-   las últimas 6 h, por horizonte y agrupando todas las estaciones
-   (`scripts/forecast_adjustments.py`, leídas con paginación de `predictions`). Sin historial
-   se envía el modelo solo. Otros valores de `PULSO_ADJUSTMENT`: `blend_cap` aplica mezcla
-   suave + tope de crecimiento, y `none` (por defecto) envía el modelo sin ajustar. El log del ciclo
-   imprime `Adjustment: mode=... mean_weights=...`. `raw_predicted_demand` guarda siempre la
-   salida pura del modelo.
+   El peso de cada experto es inverso a su error medio^6 sobre las predicciones ya evaluadas de
+   las últimas 4 h, por horizonte y agrupando todas las estaciones
+   (`scripts/forecast_adjustments.py`, que lee `predictions` con paginación).
+
+   - En horas normales manda el modelo.
+   - Durante el drift periódico de 4 h que inyecta la competencia, manda la copia de hace 4 h.
+   - Sin historial reciente, se envía el modelo solo.
+
+   La variable `PULSO_ADJUSTMENT` cambia el modo: `none` envía el modelo sin ajustar y
+   `blend_cap` aplica mezcla suave + tope de crecimiento. El log del ciclo imprime
+   `Adjustment: mode=... mean_weights=...`, y `raw_predicted_demand` guarda siempre la salida
+   pura del modelo.
 6. **Enviar**: valida el payload localmente (mismo `validate()` que usa la
    vista previa) y hace `POST /v1/submissions` con `Idempotency-Key:
    {cycle_id}:{model_version}` y la versión del modelo + commit de Git. El
@@ -393,7 +398,7 @@ Y estas variables (`vars`, no secrets):
 - `PULSO_SUBMIT_ENABLED` (opcional; `false` para desactivar el envío real)
 - `PULSO_BIAS_CORRECTION` (opcional; `true` para aplicar la corrección de sesgo
   global; por defecto solo se mide)
-- `PULSO_ADJUSTMENT` (opcional; `none` por defecto, `ensemble` o `blend_cap`)
+- `PULSO_ADJUSTMENT` (opcional; `ensemble` por defecto, `none` o `blend_cap`)
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.

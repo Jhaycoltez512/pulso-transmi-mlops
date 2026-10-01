@@ -307,6 +307,66 @@ periodo:
   evento nuevo no se puede anticipar desde la demanda pasada; haría falta el contexto de
   eventos (`event_intensity`), que la API no publica desde el 9-sep.
 
+### Adoptado: expertos periódicos para el drift de 4 h (1-oct)
+
+**El patrón.** Desde el 18-sep a las 05:00 UTC, la demanda inyectada no es un pulso aislado:
+es una oscilación con período de exactamente 4 h. Frente al día comparable, los picos llegan a
+×5–11 y los valles a ×0.1–0.2. Las estaciones forman cuatro grupos, desfasados 1 h entre sí:
+
+| Grupo | Estaciones | Valles (UTC) |
+|---|---|---|
+| A | 02300, 06000, 07111 | 07, 11, 15 h |
+| B | 05000, 07105, 09122 | 05, 09, 13 h |
+| C | 05100, 07107, 10009 | 06, 10, 14 h |
+| D | 03000, 06111, 09000 | 08, 12 h |
+
+**El modelo no puede aprenderlo:**
+
+- su memoria va de 15 min a 2 h;
+- normaliza por el nivel de las últimas 4 h;
+- el evento son ~10 h de datos frente a 50 días de historia normal;
+- la API no publica contexto después del 09-sep, así que no hay `event_intensity` ni ninguna
+  otra señal del evento.
+
+**El remedio.** "Copiar la serie de hace 4 h" acierta ~90% durante este régimen y ~36% en un
+día normal. Son justo los dos casos en que el modelo hace lo contrario. Por eso
+`forecast_adjustments.py` suma al ensamble los expertos `lag_2h` … `lag_6h` (la demanda P horas
+antes del objetivo), y los pesos por error reciente eligen el adecuado.
+
+**Backtest** (walk-forward, 12-sep → 18-sep 15:00). Accuracy media por estación (%), promedio
+de h15–h60:
+
+| Variante | Todo | Sin evento | Evento | Evento 05–09h | Evento 09h+ |
+|---|---|---|---|---|---|
+| Modelo solo | 80.67 | 85.82 | 26.2 | 38.5 | 22.5 |
+| Ensamble viejo (6 h, p3) | 82.87 | 86.06 | 48.2 | 46.2 | 47.7 |
+| Modelo + periódicos (4 h, p6) | 84.34 | 85.77 | 67.8 | 43.7 | 83.3 |
+| **Todos los expertos, global, 4 h, p6** | **84.77** | **86.04** | **70.9** | **49.3** | **83.7** |
+| Copia de hace 4 h (sola) | 15.8 | 13.5 | 64.6 | 36.2 | 89.0 |
+
+**Repetición sobre las predicciones reales del modelo en producción**
+(`production_adjust` con el historial real). El ensamble viejo reproduce exactamente lo que se
+envió en vivo (55.5 y 58.6 a las 13:00 y 14:00), lo que valida la repetición.
+
+| Corte | 06 | 07 | 08 | 09 | 10 | 11 | 12 | 13 | 14 | Media 09–14 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Modelo | 40.0 | 50.8 | 44.2 | 45.0 | 41.7 | 65.9 | 58.1 | 60.8 | 60.5 | 55.3 |
+| Ensamble viejo | 42.7 | 51.9 | 53.1 | 50.1 | 47.8 | 60.0 | 56.6 | 55.5 | 58.6 | 54.8 |
+| **Nuevo** | 42.3 | 57.9 | 58.4 | 65.7 | 70.7 | 88.0 | 86.8 | 90.2 | 90.5 | **82.0** |
+
+**Adoptado:** `DEFAULT_ADJUSTMENT="ensemble"` con todos los expertos, pesos globales por
+horizonte, ventana de 4 h y potencia 6.
+
+- En horas normales el modelo conserva ~todo el peso.
+- Tras un período completo del régimen (09h+), `lag_4h` pesa ~0.8.
+
+**Límites:**
+
+- Las primeras ~4 h de un régimen nuevo no se pueden copiar: aún no hay un período completo
+  observado.
+- Un drift sin periodicidad no se beneficia de los expertos periódicos.
+- Solo cubre períodos de 2 a 6 h.
+
 ### Probado y revertido: ensamble adaptativo de expertos después del modelo (1-oct)
 
 Desde el 18-sep a las 05:00 UTC la competencia inyecta eventos: todo el sistema ×2.6–3.4
