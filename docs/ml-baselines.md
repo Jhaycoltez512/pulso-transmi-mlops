@@ -343,14 +343,14 @@ Precisión media por estación (%), promedio de h15/h30/h45/h60:
 |---|---|---|---|---|---|---|---|
 | Producción (modelo solo) | 81.90 | 85.82 | 26.9 | 85.28 | 83.03 | 80.84 | 78.43 |
 | Mezcla 0.25 | 82.66 | 86.13 | 32.2 | 85.61 | 83.59 | 81.71 | 79.71 |
-| Mezcla + tope ×1.5 | 82.90 | 85.86 | 42.2 | 85.48 | 83.63 | 82.18 | 80.29 |
+| Mezcla + tope ×1.5 | 82.90 | 85.63 | 42.2 | 85.48 | 83.63 | 82.18 | 80.29 |
 | Mezcla + tope ×2.5 | 83.40 | 86.10 | 42.9 | 85.85 | 84.06 | 82.77 | 80.93 |
-| Ensamble por estación+h, 24 h, p2 | 83.06 | 85.91 | 40.7 | 85.91 | 83.84 | 82.08 | 80.42 |
-| Ensamble global por h, 6 h, p2 | 83.31 | 85.80 | 46.0 | 86.31 | 83.96 | 82.43 | 80.55 |
+| Ensamble por estación+h, 24 h, p2 | 83.06 | 85.91 | 40.5 | 85.91 | 83.84 | 82.08 | 80.42 |
+| Ensamble global por h, 6 h, p2 | 83.31 | 85.80 | 46.3 | 86.31 | 83.96 | 82.43 | 80.55 |
 | **Ensamble global por h, 6 h, p3** | **83.60** | **86.06** | **47.0** | 86.43 | 84.20 | 82.78 | 80.98 |
 | Ensamble sobre mezcla+tope ×2, global 6 h | 83.00 | 85.29 | 48.8 | 86.18 | 83.57 | 82.02 | 80.22 |
-| Persistencia | 74.0 | 75.6 | 48.4 | 83.55 | 77.78 | 70.75 | 63.59 |
-| Día comparable | 72.6 | 75.8 | 26.4 | 72.58 | 72.27 | 72.66 | 73.38 |
+| Persistencia | 73.9 | 75.6 | 48.4 | 83.55 | 77.78 | 70.75 | 63.59 |
+| Día comparable | 72.7 | 76.1 | 26.5 | 72.58 | 72.27 | 72.66 | 73.38 |
 
 **Adoptado**: el ensamble global por horizonte con ventana de 6 h y potencia 3
 (`DEFAULT_ADJUSTMENT="ensemble"` en `run_forecast_cycle.py`). En horas normales mejora al
@@ -360,7 +360,8 @@ modelo en los cuatro horizontes, y en el evento lo mejora mucho (+20 puntos de m
   72 muestras en 6 h, y una estación sin historial propio aprende de las demás.
 - Una ventana más corta reacciona antes al evento. La potencia 3 deja que lidere el experto
   que viene acertando.
-- En horas normales el modelo pesa ~0.55, el día comparable ~0.25 y la persistencia ~0.2.
+- En la variante global de 6 h cuyos pesos se registraron (p2 sobre mezcla+tope), el modelo
+  pesa ~0.55 en horas normales, y el resto se reparte entre persistencia y día comparable.
   Durante el evento el modelo baja a ~0.35 y suben la persistencia (a h15) o el día
   comparable (a h60).
 
