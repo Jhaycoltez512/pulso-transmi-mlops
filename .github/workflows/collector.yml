@@ -57,4 +57,5 @@ jobs:
           MLFLOW_EXPERIMENT_NAME: pulso-transmi
           PULSO_SUBMIT_ENABLED: ${{ vars.PULSO_SUBMIT_ENABLED }}
           PULSO_BIAS_CORRECTION: ${{ vars.PULSO_BIAS_CORRECTION }}
+          PULSO_ADJUSTMENT: ${{ vars.PULSO_ADJUSTMENT }}
         run: python scripts/run_forecast_cycle.py

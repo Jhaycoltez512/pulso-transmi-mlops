@@ -83,6 +83,15 @@ class SupabaseLoader:
         response.raise_for_status()
         return response.json()
 
+    def select_all(self, table: str, params: dict[str, Any], order: str, page_size: int = 1000) -> list[dict[str, Any]]:
+        """select() past PostgREST's max-rows cap (1000 by default), paging with a stable order."""
+        rows: list[dict[str, Any]] = []
+        while True:
+            page = self.select(table, {**params, "order": order, "limit": page_size, "offset": len(rows)})
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+
     def insert_many(self, table: str, rows: list[dict[str, Any]]) -> None:
         for batch in batches(rows):
             response = self.client.post(f"/{table}", json=batch, headers={"Prefer": "return=minimal"})
