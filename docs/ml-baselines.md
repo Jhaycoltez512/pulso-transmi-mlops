@@ -279,6 +279,34 @@ backtests de pesos, sesgo y walk-forward usan el modelo actual (`fit_model` /
 `predict_demand`); los de recencia y features estacionales conservan `RAW_FEATURES` porque
 documentan experimentos sobre el modelo anterior.
 
+### Descartado: ventana de entrenamiento, recencia y memoria de 1 día (30-sep)
+
+Con el drift inyectado a mano por el profesor, se probó si convenía entrenar con menos
+historia, dar más peso a lo reciente o recuperar la memoria de 1 día
+(`scripts/backtest_training_window.py`, mismo walk-forward cada 12 h sobre 12–18 sep con
+datos reales, mismo modelo normalizado por nivel). Accuracy media por estación, todo el
+periodo:
+
+| Variante | h15 | h30 | h45 | h60 |
+|---|---:|---:|---:|---:|
+| **Producción (toda la historia)** | **87.19** | **86.00** | 84.68 | 83.36 |
+| + `lag_96` y `rolling_mean_96` | 87.14 | 85.91 | **84.77** | **83.65** |
+| Recencia, vida media 7 días | 87.06 | 85.80 | 84.30 | 82.93 |
+| Últimos 14 días | 86.94 | 85.54 | 84.03 | 82.45 |
+| Recencia, vida media 3 días | 86.98 | 85.39 | 83.97 | 82.41 |
+| Últimos 7 días | 86.66 | 84.98 | 83.22 | 81.35 |
+
+- **Recortar la historia o ponderar por recencia empeora en los 4 horizontes**, más cuanto
+  más corta la ventana. El modelo normalizado por nivel aprovecha la historia vieja (la
+  forma de la demanda) sin anclarse a su nivel, así que conviene seguir entrenando con todo.
+- **La memoria de 1 día queda empatada** (±0.3 puntos). Ayuda en las estaciones estables y
+  en las últimas 24 h (+0.4 a +0.7), pero empeora 1.5–2.5 puntos el día de los cambios de
+  nivel (16-sep) y en las estaciones que cambiaron (02300, 05000, 05100). No se adoptó.
+- **Ninguna variante resuelve el evento del 18-sep 05:00–06:00 UTC** (picos ×3–5 en 09122,
+  03000, 06111 y 07105, caídas en 10009 y 07107): todas quedan en 36–64% en esa hora. Un
+  evento nuevo no se puede anticipar desde la demanda pasada; haría falta el contexto de
+  eventos (`event_intensity`), que la API no publica desde el 9-sep.
+
 ## Backtest walk-forward de CatBoost
 
 `scripts/backtest_catboost_direct.py` entrena y evalúa en varias ventanas de
