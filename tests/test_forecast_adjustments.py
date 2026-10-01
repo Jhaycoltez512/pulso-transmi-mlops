@@ -113,6 +113,20 @@ def test_production_adjust_without_history_submits_the_adjusted_model() -> None:
     assert weights["model"] == 1.0
 
 
+def test_production_ensemble_pooled_over_stations_uses_every_station_history() -> None:
+    data, predictions, history = _cycle(model_value=200.0)
+    other = data.assign(station_id="06000")
+    data = pd.concat([data, other], ignore_index=True)
+    # 06000 has no history of its own: pooled per horizon, it still learns from 07111's errors
+    predictions = predictions.assign(station_id="06000")
+    pooled, weights = production_adjust(data, predictions, history, "ensemble", timedelta(hours=24), 3.0,
+                                        ensemble_on_adjusted=False, pool_stations=True)
+    assert abs(pooled[0] - 100.0) < 1.0
+    alone, _ = production_adjust(data, predictions, history, "ensemble", timedelta(hours=24), 3.0,
+                                 ensemble_on_adjusted=False, pool_stations=False)
+    assert alone.tolist() == [200.0]
+
+
 def test_select_all_pages_past_the_row_cap() -> None:
     loader = SupabaseLoader.__new__(SupabaseLoader)
     rows = [{"id": i} for i in range(2500)]

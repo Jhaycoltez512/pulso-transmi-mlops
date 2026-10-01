@@ -323,6 +323,21 @@ tocar nada. Si lo hay:
    por nivel no mejoró en el periodo real de cambios, porque el factor global
    mezcla estaciones que suben con estaciones que bajan (ver
    `docs/ml-baselines.md`).
+   **Ensamble adaptativo** (por defecto desde el 1-oct): la predicción final combina tres
+   expertos:
+
+   - el modelo;
+   - la persistencia (demanda en el corte);
+   - el día comparable a la misma hora (Mar–Vie: el día anterior; Lun: el viernes; fines de
+     semana: hace una semana).
+
+   El peso de cada uno es inverso a su error medio^3 sobre las predicciones ya evaluadas de
+   las últimas 6 h, por horizonte y agrupando todas las estaciones
+   (`scripts/forecast_adjustments.py`, leídas con paginación de `predictions`). Sin historial
+   se envía el modelo solo. La variable `PULSO_ADJUSTMENT` lo cambia: `blend_cap` aplica
+   mezcla suave + tope de crecimiento, y `none` envía el modelo sin ajustar. El log del ciclo
+   imprime `Adjustment: mode=... mean_weights=...`. `raw_predicted_demand` guarda siempre la
+   salida pura del modelo.
 6. **Enviar**: valida el payload localmente (mismo `validate()` que usa la
    vista previa) y hace `POST /v1/submissions` con `Idempotency-Key:
    {cycle_id}:{model_version}` y la versión del modelo + commit de Git. El
@@ -376,6 +391,7 @@ Y estas variables (`vars`, no secrets):
 - `PULSO_SUBMIT_ENABLED` (opcional; `false` para desactivar el envío real)
 - `PULSO_BIAS_CORRECTION` (opcional; `true` para aplicar la corrección de sesgo
   global; por defecto solo se mide)
+- `PULSO_ADJUSTMENT` (opcional; `ensemble` por defecto, `blend_cap` o `none`)
 
 GitHub ejecuta workflows programados desde la rama predeterminada: incorpora
 este archivo en esa rama antes de esperar ejecuciones automáticas.

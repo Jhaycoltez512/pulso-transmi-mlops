@@ -85,12 +85,18 @@ STATION_DRIFT_WINDOW = timedelta(hours=24)
 STATION_DRIFT_THRESHOLD = float(np.log(1.5))
 STATION_DRIFT_PREFIX = "station_level:"
 # Post-model adjustment (scripts/forecast_adjustments.py), chosen with
-# scripts/backtest_adjustments.py on real data: "none" submits the model as is, "blend_cap" adds
-# the mild comparable-day blend and the growth cap, "ensemble" weights model / persistence /
-# comparable day per station and horizon by recent inverse error. Override with PULSO_ADJUSTMENT.
-DEFAULT_ADJUSTMENT = "none"
-ENSEMBLE_WINDOW = timedelta(hours=24)
-ENSEMBLE_POWER = 2.0
+# scripts/backtest_adjustments.py on real data (12-18 sep, walk-forward, hourly origins):
+# "ensemble" weights model / persistence / comparable day by their inverse error^3 over the
+# last 6h, one set of weights per horizon across stations -- mean accuracy 83.6% vs 81.9% for
+# the model alone, better at every horizon both in ordinary hours and in the injected event.
+# "blend_cap" (mild comparable-day blend + growth cap x2.5, 83.4%) and "none" stay available
+# through PULSO_ADJUSTMENT.
+DEFAULT_ADJUSTMENT = "ensemble"
+ENSEMBLE_WINDOW = timedelta(hours=6)
+ENSEMBLE_POWER = 3.0
+ENSEMBLE_POOL_STATIONS = True
+ENSEMBLE_ON_ADJUSTED = False
+ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
 BIAS_WINDOW_HOURS = 4
@@ -494,7 +500,10 @@ def main() -> None:
                 "horizon_minutes": [horizon_lookup[(p["station_id"], p["target_at"])] for p in predictions],
                 "model": [p["value"] for p in predictions],
             })
-            values, mean_weights = production_adjust(data, frame, history_frame, adjustment, ENSEMBLE_WINDOW, ENSEMBLE_POWER)
+            values, mean_weights = production_adjust(
+                data, frame, history_frame, adjustment, ENSEMBLE_WINDOW, ENSEMBLE_POWER,
+                ensemble_on_adjusted=ENSEMBLE_ON_ADJUSTED, threshold=ADJUST_CAP_THRESHOLD, pool_stations=ENSEMBLE_POOL_STATIONS,
+            )
             for p, value in zip(predictions, values, strict=True):
                 p["value"] = float(value)
             print(f"Adjustment: mode={adjustment} history_rows={len(history_frame)} mean_weights={mean_weights}")

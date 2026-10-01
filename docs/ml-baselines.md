@@ -307,6 +307,73 @@ periodo:
   evento nuevo no se puede anticipar desde la demanda pasada; haría falta el contexto de
   eventos (`event_intensity`), que la API no publica desde el 9-sep.
 
+### Adoptado: ensamble adaptativo de expertos después del modelo (1-oct)
+
+Desde el 18-sep a las 05:00 UTC la competencia inyecta eventos: todo el sistema ×2.6–3.4
+frente al día anterior, y grupos de estaciones que pulsan juntos. El modelo normalizado por
+nivel sigue el nivel reciente de cada estación. Eso funciona bien ante cambios sostenidos,
+pero en un evento aplica la rampa habitual de la mañana sobre un nivel ya inflado
+(07111: nivel 3759, predijo 4690 → 6718, real 2775 → 1751). Ningún predictor gana en todas
+partes:
+
+- el día comparable acierta en horas normales y falla en el evento;
+- la persistencia hace lo contrario;
+- el modelo gana ante cambios de nivel sostenidos.
+
+`scripts/forecast_adjustments.py` reúne los ajustes posteriores al modelo:
+
+- **Día comparable**: el día más reciente del mismo tipo. Martes a viernes usan el día
+  anterior, el lunes usa el viernes y los fines de semana usan el mismo día de la semana
+  anterior.
+- **Mezcla suave**: lleva la predicción hacia el día comparable con peso
+  0.25 × horizonte / 60.
+- **Tope de crecimiento**: si la estación va más de N veces por encima de su día comparable,
+  no se predice por encima de máx(nivel actual, día comparable en el objetivo).
+- **Ensamble adaptativo**: combina modelo, persistencia y día comparable con pesos
+  proporcionales a MAE^-p. El MAE de cada experto se calcula sobre los objetivos ya
+  observados en una ventana reciente, sin mirar el futuro.
+
+`scripts/backtest_adjustments.py` los compara en walk-forward sobre datos reales: reentrena
+cada 12 h y evalúa orígenes horarios, como los ciclos. El periodo va del 12-sep al
+18-sep 12:00 UTC. El tramo "evento" son las ~6 h desde las 05:00 UTC del 18-sep.
+
+Precisión media por estación (%), promedio de h15/h30/h45/h60:
+
+| Variante | Todo | Sin evento | Evento | h15 | h30 | h45 | h60 |
+|---|---|---|---|---|---|---|---|
+| Producción (modelo solo) | 81.90 | 85.82 | 26.9 | 85.28 | 83.03 | 80.84 | 78.43 |
+| Mezcla 0.25 | 82.66 | 86.13 | 32.2 | 85.61 | 83.59 | 81.71 | 79.71 |
+| Mezcla + tope ×1.5 | 82.90 | 85.86 | 42.2 | 85.48 | 83.63 | 82.18 | 80.29 |
+| Mezcla + tope ×2.5 | 83.40 | 86.10 | 42.9 | 85.85 | 84.06 | 82.77 | 80.93 |
+| Ensamble por estación+h, 24 h, p2 | 83.06 | 85.91 | 40.7 | 85.91 | 83.84 | 82.08 | 80.42 |
+| Ensamble global por h, 6 h, p2 | 83.31 | 85.80 | 46.0 | 86.31 | 83.96 | 82.43 | 80.55 |
+| **Ensamble global por h, 6 h, p3** | **83.60** | **86.06** | **47.0** | 86.43 | 84.20 | 82.78 | 80.98 |
+| Ensamble sobre mezcla+tope ×2, global 6 h | 83.00 | 85.29 | 48.8 | 86.18 | 83.57 | 82.02 | 80.22 |
+| Persistencia | 74.0 | 75.6 | 48.4 | 83.55 | 77.78 | 70.75 | 63.59 |
+| Día comparable | 72.6 | 75.8 | 26.4 | 72.58 | 72.27 | 72.66 | 73.38 |
+
+**Adoptado**: el ensamble global por horizonte con ventana de 6 h y potencia 3
+(`DEFAULT_ADJUSTMENT="ensemble"` en `run_forecast_cycle.py`). En horas normales mejora al
+modelo en los cuatro horizontes, y en el evento lo mejora mucho (+20 puntos de media).
+
+- Los pesos se agrupan por horizonte entre todas las estaciones. Así cada peso tiene unas
+  72 muestras en 6 h, y una estación sin historial propio aprende de las demás.
+- Una ventana más corta reacciona antes al evento. La potencia 3 deja que lidere el experto
+  que viene acertando.
+- En horas normales el modelo pesa ~0.55, el día comparable ~0.25 y la persistencia ~0.2.
+  Durante el evento el modelo baja a ~0.35 y suben la persistencia (a h15) o el día
+  comparable (a h60).
+
+Sin historial (primer ciclo, o sin predicciones evaluadas en 6 h) el ensamble envía el modelo
+solo. `PULSO_ADJUSTMENT=blend_cap` usa la mezcla + tope ×2.5 (segunda mejor y sin estado), y
+`PULSO_ADJUSTMENT=none` desactiva cualquier ajuste. `raw_predicted_demand` sigue guardando la
+salida pura del modelo: es lo que miden `performance_drift` y el factor de sesgo, y es el
+historial del experto "modelo".
+
+Caveat: el tramo de evento es un solo episodio de ~6 h, así que la ganancia en evento tiene
+mucha incertidumbre. Lo robusto es que en ~6 días de horas normales el ensamble no empeora a
+ningún horizonte.
+
 ## Backtest walk-forward de CatBoost
 
 `scripts/backtest_catboost_direct.py` entrena y evalúa en varias ventanas de
