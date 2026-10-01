@@ -339,8 +339,8 @@ de h15–h60:
 | Variante | Todo | Sin evento | Evento | Evento 05–09h | Evento 09h+ |
 |---|---|---|---|---|---|
 | Modelo solo | 80.67 | 85.82 | 26.2 | 38.5 | 22.5 |
-| Ensamble viejo (6 h, p3) | 82.87 | 86.06 | 48.2 | 46.2 | 47.7 |
-| Modelo + periódicos (4 h, p6) | 84.34 | 85.77 | 67.8 | 43.7 | 83.3 |
+| Ensamble viejo (6 h, p3) | 82.87 | 86.06 | 48.2 | 48.7 | 47.7 |
+| Modelo + periódicos (4 h, p6) | 84.34 | 85.77 | 68.5 | 43.7 | 83.3 |
 | **Todos los expertos, global, 4 h, p6** | **84.77** | **86.04** | **70.9** | **49.3** | **83.7** |
 | Copia de hace 4 h (sola) | 15.8 | 13.5 | 64.6 | 36.2 | 89.0 |
 
