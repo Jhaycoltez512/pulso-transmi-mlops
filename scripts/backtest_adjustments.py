@@ -36,14 +36,14 @@ ALL = (*OLD, *PERIODIC_EXPERTS)
 ENSEMBLES = {
     # name: (experts, pool by, window, power)
     "ens viejo global 6h p3": (OLD, [], timedelta(hours=6), 3.0),
-    "ens modelo+periodicos global 6h p3": (PERIODIC, [], timedelta(hours=6), 3.0),
-    "ens modelo+periodicos global 3h p3": (PERIODIC, [], timedelta(hours=3), 3.0),
     "ens modelo+periodicos global 6h p6": (PERIODIC, [], timedelta(hours=6), 6.0),
-    "ens modelo+periodicos est+h 6h p3": (PERIODIC, ["station_id"], timedelta(hours=6), 3.0),
-    "ens todos global 6h p3": (ALL, [], timedelta(hours=6), 3.0),
+    "ens modelo+periodicos global 4h p6": (PERIODIC, [], timedelta(hours=4), 6.0),
+    "ens modelo+periodicos global 3h p6": (PERIODIC, [], timedelta(hours=3), 6.0),
+    "ens modelo+periodicos global 6h p10": (PERIODIC, [], timedelta(hours=6), 10.0),
+    "ens modelo+periodicos global 4h p10": (PERIODIC, [], timedelta(hours=4), 10.0),
+    "ens todos global 6h p6": (ALL, [], timedelta(hours=6), 6.0),
+    "ens todos global 4h p6": (ALL, [], timedelta(hours=4), 6.0),
     "ens todos global 3h p3": (ALL, [], timedelta(hours=3), 3.0),
-    "ens todos est+h 6h p3": (ALL, ["station_id"], timedelta(hours=6), 3.0),
-    "ens modelo+lag4h global 6h p3": (("model", "lag_4h"), [], timedelta(hours=6), 3.0),
 }
 
 
@@ -87,7 +87,7 @@ def main() -> None:
         history = pd.concat([hourly[["station_id", "target_at"]], table], axis=1).assign(actual=hourly["target_demand"])
         weights = expert_weights(history, hourly[["station_id", "observed_at"]], keys, window, power, experts)
         hourly[name] = combine(table, weights)
-        if name == "ens todos global 6h p3":
+        if name == "ens modelo+periodicos global 4h p6":
             for label, part in (("normal", ~event), ("evento 05-09h", event & ~late), ("evento 09h+", late)):
                 print(f"pesos medios {name} [{label}]: {weights.loc[part.to_numpy()].mean().round(2).to_dict()}")
 
