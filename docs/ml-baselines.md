@@ -411,6 +411,32 @@ producción como experto "modelo"):
 - El ensamble elige la copia al principio y el promedio cuando ya hay historia.
 - En días normales no cambia nada.
 
+### Descartado: ponderaciones del promedio de período (2-oct)
+
+`scripts/backtest_periodic_weighted.py` compara refinamientos del promedio de 6 períodos en 21
+ciclos reales del régimen (19-sep 05:00 → 20-sep 01:00 UTC), con la métrica 1 − WAPE por ciclo.
+Todas las variantes usan solo copias de al menos 4 h de antigüedad, así que no usan
+información futura.
+
+| Variante | Por ciclo | Gana a media 6 |
+|---|---|---|
+| Promedio ponderado por recencia (0.85) | 93.03 | 11/21 |
+| **Media 6 (producción)** | **93.01** | — |
+| Ponderación elegida por estación según su error reciente | 92.94 | 8/21 |
+| Media 6 suavizada en el tiempo | 92.95 | 10/21 |
+| Media recortada / mediana | 92.81–92.89 | 4–6/21 |
+| Corrección de sesgo por estación | 92.85 | 6/21 |
+| Pesos por estación (ridge) | 89.4–91.1 | 0–1/21 |
+| Media 8 / media 12 | 90.64 / 78.48 | 5 / 0 |
+
+**Resultado:** ninguna supera a la media de 6 más allá del ruido.
+
+- Con 8 o 12 períodos el promedio mezcla datos de antes del régimen.
+- Los pesos por estación sobreajustan con 24 h de datos.
+
+~93% por ciclo parece el techo del enfoque periódico, y coincide con el promedio de 7 ciclos de
+los líderes de la competencia (93.0–93.2).
+
 ### Probado y revertido: ensamble adaptativo de expertos después del modelo (1-oct)
 
 Desde el 18-sep a las 05:00 UTC la competencia inyecta eventos: todo el sistema ×2.6–3.4
