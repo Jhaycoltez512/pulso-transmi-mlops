@@ -153,7 +153,11 @@ def replay(y: pd.DataFrame, sent: pd.DataFrame) -> None:
     data = y.stack().rename("demand").reset_index().rename(columns={"level_1": "station_id"})
     data.columns = ["observed_at", "station_id", "demand"]
     actual = data.set_index(["station_id", "observed_at"])["demand"]
-    sets = {"produccion: copias 2-6h": (*EXPERTS, *LAG_EXPERTS), "nuevo: promedios 2-6h": (*EXPERTS, *PERIODIC_EXPERTS)}
+    sets = {
+        "produccion: copias 2-6h": (*EXPERTS, *LAG_EXPERTS),
+        "solo promedios 2-6h": (*EXPERTS, *PERIODIC_EXPERTS),
+        "nuevo: copias + promedios": (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS),
+    }
     rows = []
     for cutoff, cycle in sent.groupby("cutoff"):
         if cutoff < REGIME_START or cycle["target_at"].max() > y.dropna(how="any").index.max():
