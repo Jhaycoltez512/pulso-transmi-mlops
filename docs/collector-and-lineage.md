@@ -344,7 +344,8 @@ tocar nada. Si lo hay:
    - la persistencia (la demanda en el corte);
    - el día comparable a la misma hora (Mar–Vie: el día anterior; Lun: el viernes; fines de
      semana: hace una semana);
-   - copias de la serie de 2, 3, 4, 5 y 6 h antes del objetivo.
+   - copias de la serie de 2, 3, 4, 5 y 6 h antes del objetivo, y el promedio de cada uno de
+     esos períodos sobre las últimas 24 h (desde el 2-oct).
 
    El peso de cada experto es inverso a su error medio^6 sobre las predicciones ya evaluadas de
    las últimas 4 h, por horizonte y agrupando todas las estaciones

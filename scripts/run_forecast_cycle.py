@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
-from forecast_adjustments import EXPERTS, PERIODIC_EXPERTS, production_adjust
+from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, production_adjust
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
@@ -98,7 +98,11 @@ ENSEMBLE_WINDOW = timedelta(hours=4)
 ENSEMBLE_POWER = 6.0
 ENSEMBLE_POOL_STATIONS = True
 ENSEMBLE_ON_ADJUSTED = False
-ENSEMBLE_EXPERTS = (*EXPERTS, *PERIODIC_EXPERTS)
+# Single-period copies (lag_Ph) and their averages over the last 24h (per_Ph): once a periodic
+# regime has run for a day the averages cancel the copies' noise (+1.5 points per cycle on the
+# live regime, 91.3% -> 92.8%), while at a regime's onset the averages still mix pre-regime
+# periods and the copies lead (backtest_periodic.py replay, docs/ml-baselines.md).
+ENSEMBLE_EXPERTS = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS)
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.

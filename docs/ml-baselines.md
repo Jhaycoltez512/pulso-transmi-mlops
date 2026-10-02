@@ -367,6 +367,50 @@ horizonte, ventana de 4 h y potencia 6.
 - Un drift sin periodicidad no se beneficia de los expertos periódicos.
 - Solo cubre períodos de 2 a 6 h.
 
+### Adoptado: promedios de período además de las copias (2-oct)
+
+**Por qué hacía falta.** Con el ensamble de copias, el 19-sep obtuvimos ~91% por ciclo,
+mientras los mejores rivales sacaban 92–93% (tabla `leaderboard_snapshots`). Copiar un solo
+período arrastra su ruido. `scripts/backtest_periodic.py` compara refinamientos de la copia de
+4 h en los 19 ciclos reales del régimen completo (19-sep, 05–23 h), con la métrica del
+leaderboard: 1 − WAPE por ciclo.
+
+| Variante | Por ciclo |
+|---|---|
+| **Media de los últimos 6 períodos** | **92.98** |
+| Media ponderada por recencia (d=0.7) | 92.93 |
+| Media de 4 períodos | 92.85 |
+| Ridge sobre 6 períodos | 92.75 |
+| Ajustes por nivel o por desvío actual | 89.0–92.8 |
+| Copia de hace 4 h / lo enviado | 91.25 / 91.30 |
+
+**Cambio en el ensamble.** Cada experto periódico `per_{P}h` promedia su período sobre las
+últimas 24 h (6 copias para P = 4 h). Se suma a las copias simples `lag_{P}h`; no las
+reemplaza.
+
+**Repetición sobre las predicciones reales** (43 ciclos del régimen, con el modelo en
+producción como experto "modelo"):
+
+| Conjunto de expertos | Primeras 24 h del régimen | Desde 24 h de régimen | Todo |
+|---|---|---|---|
+| Producción (copias) | 82.44 | 91.30 | 86.35 |
+| Solo promedios | 66.94 | 92.91 | 78.41 |
+| **Copias + promedios** | 81.57 | **92.80** | **86.54** |
+
+**Walk-forward 12–20 sep** (accuracy media por estación, promedio de h15–h60):
+
+| Conjunto de expertos | Días normales | 19-sep |
+|---|---|---|
+| Copias | 86.04 | 90.15 |
+| Copias + promedios | 86.03 | 92.03 |
+
+**Lectura de los resultados:**
+
+- Los promedios solos fallan al inicio de un régimen, porque mezclan copias de antes de que
+  empezara. Por eso van junto a las copias.
+- El ensamble elige la copia al principio y el promedio cuando ya hay historia.
+- En días normales no cambia nada.
+
 ### Probado y revertido: ensamble adaptativo de expertos después del modelo (1-oct)
 
 Desde el 18-sep a las 05:00 UTC la competencia inyecta eventos: todo el sistema ×2.6–3.4
