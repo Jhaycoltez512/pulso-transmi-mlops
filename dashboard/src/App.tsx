@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActiveModel } from "./components/ActiveModel";
 import { Card } from "./components/Card";
+import { CycleLeaderboard } from "./components/CycleLeaderboard";
 import { DriftSignals } from "./components/DriftSignals";
 import { ErrorDistribution } from "./components/ErrorDistribution";
 import { MapIcon } from "./components/icons";
@@ -76,6 +77,8 @@ export default function App() {
         <StationDrift stations={stations} />
 
         <Leaderboard />
+
+        <CycleLeaderboard />
       </main>
 
       <footer className="mx-auto mt-10 max-w-6xl text-xs text-slate-600">

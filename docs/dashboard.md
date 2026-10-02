@@ -89,3 +89,37 @@ npm run dev
   que `PULSO_API_KEY` no aparece en ninguna respuesta.
 - No pude desplegar a Vercel yo mismo (no tengo cuenta) ni correr `vercel
   dev` (requiere su CLI) — los pasos de arriba son para que lo hagas tú.
+
+## Competencia ciclo a ciclo
+
+La API solo publica el leaderboard acumulado y el de 24 h. Para ver cómo le fue a cada
+participante en cada ciclo:
+
+- **Captura:** `scripts/sync_leaderboard.py` corre al final de cada ejecución del collector y
+  guarda una foto de ambas ventanas en `leaderboard_snapshots`. Ese paso nunca bloquea el
+  pipeline.
+- **Cuándo se escribe:** solo cuando cambia la tabla, es decir, cuando la API resuelve un
+  ciclo nuevo.
+
+**Cómo se calcula el resultado de cada ciclo.** La accuracy acumulada no es un promedio de
+ciclos. El `raw_wape` acumulado es el error absoluto total del participante dividido entre la
+demanda real total de todos los objetivos resueltos. Todos los participantes se evalúan sobre
+los mismos objetivos. Por eso, con A_n = la demanda real de los objetivos de los primeros n
+ciclos, calculada con nuestros `forecast_targets` y `observations`, el WAPE del ciclo n es:
+
+    (W_n · c_n · A_n − W_{n−1} · c_{n−1} · A_{n−1}) / (A_n − A_{n−1})
+
+donde c es la cobertura. El resultado es exacto con cobertura 1 y aproximado si el participante
+saltó ciclos. Quien no envió el ciclo aparece como "no envió".
+
+**Verificación:** nuestro WAPE acumulado calculado así es 0.2532, y la API reporta 0.2533 para
+los mismos 162 ciclos.
+
+**La tarjeta "Competencia ciclo a ciclo" muestra:**
+
+- una gráfica de los últimos 24 ciclos con tu equipo y los dos mejores rivales de los últimos
+  7 ciclos;
+- una tabla de los últimos 7 ciclos para todos los participantes, con el promedio.
+
+**Desde cuándo hay datos:** solo desde que se activó la captura, el 2-oct. La API no da
+historial por ciclo.
