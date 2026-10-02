@@ -59,3 +59,13 @@ jobs:
           PULSO_BIAS_CORRECTION: ${{ vars.PULSO_BIAS_CORRECTION }}
           PULSO_ADJUSTMENT: ${{ vars.PULSO_ADJUSTMENT }}
         run: python scripts/run_forecast_cycle.py
+      - name: Snapshot the competition leaderboard
+        # Read-only against the API; never blocks the pipeline. Feeds the dashboard's per-cycle view.
+        if: always()
+        continue-on-error: true
+        env:
+          PULSO_API_URL: ${{ vars.PULSO_API_URL }}
+          PULSO_API_KEY: ${{ secrets.PULSO_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python scripts/sync_leaderboard.py

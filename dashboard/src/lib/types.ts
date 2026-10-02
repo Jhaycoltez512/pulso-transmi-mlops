@@ -104,3 +104,13 @@ export interface LeaderboardResponse {
   rolling_24h: LeaderboardRow[];
   error?: string;
 }
+
+export interface LeaderboardSnapshotRow {
+  display_name: string;
+  resolved_cycles: number;
+  captured_at: string;
+  rank: number;
+  accuracy: number;
+  cycle_accuracy: number | null;
+  is_me: boolean;
+}
