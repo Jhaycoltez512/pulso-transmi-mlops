@@ -23,11 +23,14 @@ This module holds the pieces that sit after the model:
   05:00 UTC the injected drift is a 4h-periodic oscillation (four station groups, one hour
   apart, x5-11 peaks and x0.1-0.2 troughs vs the comparable day): copying the series from 4h
   earlier scores ~90% there and ~36% on a normal day, so the recent-error weights pick it only
-  while such a regime lasts.
+  while such a regime lasts. Each periodic expert averages its period over the last
+  PERIODIC_WINDOW (6 periods for 4h): averaging cancels the noise of copying a single period,
+  ~91.3% -> ~93.0% per cycle on the live regime (backtest_periodic.py).
 """
 
 from __future__ import annotations
 
+import warnings
 from datetime import timedelta
 
 import numpy as np
@@ -40,7 +43,9 @@ BLEND_ALPHA = 0.25  # weight on the comparable day at h60; scales linearly with 
 CAP_THRESHOLD = 1.5  # current level / comparable-day level above which the growth cap applies
 EXPERTS = ("model", "persistence", "comparable")
 PERIOD_HOURS = (2, 3, 4, 5, 6)
-PERIODIC_EXPERTS = tuple(f"lag_{p}h" for p in PERIOD_HOURS)
+PERIODIC_WINDOW = timedelta(hours=24)  # how far back each periodic expert averages its period
+LAG_EXPERTS = tuple(f"lag_{p}h" for p in PERIOD_HOURS)  # single-period copies (kept for backtests)
+PERIODIC_EXPERTS = tuple(f"per_{p}h" for p in PERIOD_HOURS)  # period averaged over PERIODIC_WINDOW
 
 
 def reference_lag_days(times: pd.Series) -> np.ndarray:
@@ -81,8 +86,15 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
     out["reference_level"] = _lookup(table, "level_now", out["station_id"], origin_ref)
     out["persistence"] = _lookup(table, "demand", out["station_id"], out["observed_at"])
     target = pd.to_datetime(out["target_at"], utc=True)
-    for hours, name in zip(PERIOD_HOURS, PERIODIC_EXPERTS):
-        out[name] = _lookup(table, "demand", out["station_id"], target - timedelta(hours=hours))
+    for hours, lag_name, mean_name in zip(PERIOD_HOURS, LAG_EXPERTS, PERIODIC_EXPERTS):
+        copies = [
+            _lookup(table, "demand", out["station_id"], target - timedelta(hours=hours * k))
+            for k in range(1, int(PERIODIC_WINDOW / timedelta(hours=hours)) + 1)
+        ]
+        out[lag_name] = copies[0]
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN rows -> NaN, as intended
+            out[mean_name] = np.nanmean(np.vstack(copies), axis=0)
     return out
 
 

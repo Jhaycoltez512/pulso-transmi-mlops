@@ -23,6 +23,7 @@ from datetime import timedelta
 import numpy as np
 import pandas as pd
 
+from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, production_adjust
 from load_supabase import SupabaseLoader, load_dotenv
 from train_baseline import load_training_data
 
@@ -103,14 +104,15 @@ def main() -> None:
 
     loader = SupabaseLoader(os.environ["SUPABASE_URL"], os.getenv("SUPABASE_SECRET_KEY") or os.environ["SUPABASE_KEY"])
     sent = pd.DataFrame(loader.select_all("predictions", {
-        "select": "station_id,target_at,horizon_minutes,predicted_demand,forecast_runs!inner(data_cutoff)",
-        "target_at": f"gt.{EVAL_START.isoformat()}",
+        "select": "station_id,target_at,horizon_minutes,predicted_demand,raw_predicted_demand,forecast_runs!inner(data_cutoff)",
+        "target_at": f"gt.{REGIME_START.isoformat()}",
     }, order="id.asc"))
     loader.close()
     if not sent.empty:
         sent["cutoff"] = pd.to_datetime(sent["forecast_runs"].map(lambda r: r["data_cutoff"]), utc=True)
         sent["target_at"] = pd.to_datetime(sent["target_at"], utc=True)
-        sent = sent.groupby(["cutoff", "target_at", "station_id"], as_index=False)["predicted_demand"].last()
+        sent["raw"] = sent["raw_predicted_demand"].fillna(sent["predicted_demand"])
+        sent = sent.groupby(["cutoff", "target_at", "station_id", "horizon_minutes"], as_index=False)[["predicted_demand", "raw"]].last()
 
     records = []
     for t in origins:
@@ -140,8 +142,39 @@ def main() -> None:
         "ciclos": per_cycle.groupby("variant").size(),
     }).join(per_h.add_prefix("h")).sort_values("ciclo (1-WAPE) medio", ascending=False)
     pd.set_option("display.width", 250)
+    replay(y, sent)
     pd.set_option("display.max_columns", 20)
     print(summary.round(2).to_string())
+
+
+def replay(y: pd.DataFrame, sent: pd.DataFrame) -> None:
+    """The production ensemble re-run on every live cycle of the regime with the live raw model as
+    its "model" expert: current expert set (single-period copies) vs the period averages."""
+    data = y.stack().rename("demand").reset_index().rename(columns={"level_1": "station_id"})
+    data.columns = ["observed_at", "station_id", "demand"]
+    actual = data.set_index(["station_id", "observed_at"])["demand"]
+    sets = {"produccion: copias 2-6h": (*EXPERTS, *LAG_EXPERTS), "nuevo: promedios 2-6h": (*EXPERTS, *PERIODIC_EXPERTS)}
+    rows = []
+    for cutoff, cycle in sent.groupby("cutoff"):
+        if cutoff < REGIME_START or cycle["target_at"].max() > y.dropna(how="any").index.max():
+            continue
+        frame = cycle.rename(columns={"raw": "model"})[["station_id", "horizon_minutes", "target_at", "model"]].assign(observed_at=cutoff).reset_index(drop=True)
+        past = sent.loc[(sent["target_at"] <= cutoff) & (sent["target_at"] > cutoff - timedelta(hours=4))].rename(columns={"raw": "model"})
+        past = past.assign(actual=[actual.get((s, t), np.nan) for s, t in zip(past["station_id"], past["target_at"])])
+        truth = np.array([actual.get((s, t), np.nan) for s, t in zip(frame["station_id"], frame["target_at"])])
+        row = {"cutoff": cutoff, "enviado": 100 * max(0, 1 - np.abs(cycle["predicted_demand"].to_numpy() - truth).sum() / truth.sum())}
+        for name, experts in sets.items():
+            values, _ = production_adjust(data, frame, past[["station_id", "horizon_minutes", "target_at", "model", "actual"]],
+                                          "ensemble", timedelta(hours=4), 6.0, ensemble_on_adjusted=False, pool_stations=True, experts=experts)
+            row[name] = 100 * max(0, 1 - np.abs(values - truth).sum() / truth.sum())
+        rows.append(row)
+    table = pd.DataFrame(rows).set_index("cutoff")
+    print("\n=== repeticion del ensamble sobre los ciclos reales (1 - WAPE por ciclo) ===")
+    print(table.round(2).to_string())
+    for label, part in (("regimen completo", table), ("primeras 24 h del regimen", table.loc[table.index < REGIME_START + timedelta(hours=24)]),
+                        ("desde 24 h de regimen", table.loc[table.index >= REGIME_START + timedelta(hours=24)])):
+        print(f"media {label} ({len(part)} ciclos): {part.mean().round(2).to_dict()}")
+    print()
 
 
 if __name__ == "__main__":

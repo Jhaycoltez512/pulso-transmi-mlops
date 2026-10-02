@@ -163,7 +163,10 @@ def test_reference_inputs_add_the_periodic_lags() -> None:
     frame = pd.DataFrame({"station_id": ["07111"], "observed_at": [origin], "target_at": [origin + timedelta(minutes=45)]})
     out = reference_inputs(data, frame).iloc[0]
     index = {t: i for i, t in enumerate(times)}
-    assert out["lag_4h"] == index[origin + timedelta(minutes=45) - timedelta(hours=4)]
+    target = origin + timedelta(minutes=45)
+    assert out["lag_4h"] == index[target - timedelta(hours=4)]
+    # the periodic expert averages the 4h period over the last 24h (6 copies)
+    assert out["per_4h"] == np.mean([index[target - timedelta(hours=4 * k)] for k in range(1, 7)])
     assert set(PERIODIC_EXPERTS) <= set(out.index)
 
 
@@ -171,7 +174,7 @@ def test_ensemble_follows_a_periodic_regime() -> None:
     # flat comparable day, then a 4h-periodic oscillation: the 4h copy is exact, the model is not
     times = pd.date_range("2026-09-14T00:00:00Z", periods=4 * 96, freq="15min", tz="UTC")
     demand = np.full(len(times), 100.0)
-    oscillating = times >= pd.Timestamp("2026-09-17T00:00:00Z")
+    oscillating = times >= pd.Timestamp("2026-09-16T00:00:00Z")  # > 24h, so every averaged copy is in-regime
     demand[oscillating] = 100 * np.exp(1.5 * np.sin(2 * np.pi * np.arange(oscillating.sum()) / 16))
     data = pd.DataFrame({"station_id": "07111", "observed_at": times, "demand": demand})
     cutoff = times[-5]
@@ -184,5 +187,6 @@ def test_ensemble_follows_a_periodic_regime() -> None:
     experts = ("model", "persistence", "comparable", *PERIODIC_EXPERTS)
     values, weights = production_adjust(data, predictions, history, "ensemble", timedelta(hours=6), 3.0,
                                         ensemble_on_adjusted=False, pool_stations=True, experts=experts)
-    assert weights["lag_4h"] > 0.9
+    # the 4h-period average is exact (so is the comparable day: 24h is 6 periods); the model isn't
+    assert weights["per_4h"] > 0.4 and weights["model"] < 0.01
     assert abs(values[0] - actual[target]) < 0.05 * actual[target]

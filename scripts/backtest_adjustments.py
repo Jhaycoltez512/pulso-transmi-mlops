@@ -22,7 +22,7 @@ from datetime import timedelta
 import numpy as np
 import pandas as pd
 
-from forecast_adjustments import PERIODIC_EXPERTS, adjust, blend_with_reference, combine, expert_frame, expert_weights, reference_inputs
+from forecast_adjustments import LAG_EXPERTS, PERIODIC_EXPERTS, adjust, blend_with_reference, combine, expert_frame, expert_weights, reference_inputs
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import add_origin_features, add_target_calendar, fit_model, predict_demand
 
@@ -31,19 +31,13 @@ DEFAULT_START = "2026-09-12T05:00:00Z"
 EVENT_START = pd.Timestamp("2026-09-18T05:00:00Z")
 CAP_THRESHOLDS = (2.5,)
 OLD = ("model", "persistence", "comparable")
-PERIODIC = ("model", *PERIODIC_EXPERTS)
-ALL = (*OLD, *PERIODIC_EXPERTS)
 ENSEMBLES = {
     # name: (experts, pool by, window, power)
-    "ens viejo global 6h p3": (OLD, [], timedelta(hours=6), 3.0),
-    "ens modelo+periodicos global 6h p6": (PERIODIC, [], timedelta(hours=6), 6.0),
-    "ens modelo+periodicos global 4h p6": (PERIODIC, [], timedelta(hours=4), 6.0),
-    "ens modelo+periodicos global 3h p6": (PERIODIC, [], timedelta(hours=3), 6.0),
-    "ens modelo+periodicos global 6h p10": (PERIODIC, [], timedelta(hours=6), 10.0),
-    "ens modelo+periodicos global 4h p10": (PERIODIC, [], timedelta(hours=4), 10.0),
-    "ens todos global 6h p6": (ALL, [], timedelta(hours=6), 6.0),
-    "ens todos global 4h p6": (ALL, [], timedelta(hours=4), 6.0),
-    "ens todos global 3h p3": (ALL, [], timedelta(hours=3), 3.0),
+    "ens produccion (copias 2-6h, 4h p6)": ((*OLD, *LAG_EXPERTS), [], timedelta(hours=4), 6.0),
+    "ens nuevo (promedios 2-6h, 4h p6)": ((*OLD, *PERIODIC_EXPERTS), [], timedelta(hours=4), 6.0),
+    "ens nuevo (promedios 2-6h, 4h p4)": ((*OLD, *PERIODIC_EXPERTS), [], timedelta(hours=4), 4.0),
+    "ens nuevo (promedios 2-6h, 6h p6)": ((*OLD, *PERIODIC_EXPERTS), [], timedelta(hours=6), 6.0),
+    "ens nuevo + copias (4h p6)": ((*OLD, *LAG_EXPERTS, *PERIODIC_EXPERTS), [], timedelta(hours=4), 6.0),
 }
 
 
@@ -79,20 +73,20 @@ def main() -> None:
     hourly["mezcla"] = blend_with_reference(model, hourly["reference"].to_numpy(), horizon)
     for threshold in CAP_THRESHOLDS:
         hourly[f"mezcla+tope x{threshold}"] = adjust(hourly, model, horizon, threshold=threshold)
-    for name in PERIODIC_EXPERTS:
-        hourly[f"copia {name}"] = hourly[name]
+    for name in ("lag_4h", "per_4h"):
+        hourly[f"experto {name}"] = hourly[name]
 
     for name, (experts, keys, window, power) in ENSEMBLES.items():
         table = expert_frame(hourly, model, experts)
         history = pd.concat([hourly[["station_id", "target_at"]], table], axis=1).assign(actual=hourly["target_demand"])
         weights = expert_weights(history, hourly[["station_id", "observed_at"]], keys, window, power, experts)
         hourly[name] = combine(table, weights)
-        if name == "ens modelo+periodicos global 4h p6":
+        if name == "ens nuevo (promedios 2-6h, 4h p6)":
             for label, part in (("normal", ~event), ("evento 05-09h", event & ~late), ("evento 09h+", late)):
                 print(f"pesos medios {name} [{label}]: {weights.loc[part.to_numpy()].mean().round(2).to_dict()}")
 
     candidates = ["produccion", "persistencia", "dia comparable", "mezcla", *(f"mezcla+tope x{t}" for t in CAP_THRESHOLDS),
-                  *(f"copia {n}" for n in PERIODIC_EXPERTS), *ENSEMBLES]
+                  "experto lag_4h", "experto per_4h", *ENSEMBLES]
     last_day = hourly["target_at"] > end - timedelta(days=1)
     rows = []
     for name in candidates:
