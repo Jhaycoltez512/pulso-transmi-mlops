@@ -188,11 +188,17 @@ def recent_performance_params(since: str, model_version_id: str | None) -> dict[
     return params
 
 
-def recent_performance(loader: SupabaseLoader, horizons: list[int], model_version_id: str | None = None) -> dict[int, dict[str, Any]]:
+def recent_performance(
+    loader: SupabaseLoader, horizons: list[int], model_version_id: str | None = None, score_submitted: bool = False,
+) -> dict[int, dict[str, Any]]:
     """WAPE per horizon from the active model's predictions evaluated within the last PERFORMANCE_WINDOW_DAYS.
 
-    Scores the raw model output, so the bias correction can't hide model degradation from
-    the retrain rule (the threshold it's compared to is the raw model's validation WAPE).
+    By default scores the raw model output, so the bias correction can't hide model degradation
+    from the retrain rule (the threshold it's compared to is the raw model's validation WAPE).
+    score_submitted=True scores what was actually submitted instead: with the adaptive ensemble
+    on, the raw model can sit above its threshold for as long as an injected regime lasts (it
+    can't learn the 4h oscillation) while the submitted values are fine, and judging the raw
+    model then retrained every two cycles for nothing (12 retrains in 24h on 1-oct).
     """
     since = (pd.Timestamp.now(tz="UTC") - timedelta(days=PERFORMANCE_WINDOW_DAYS)).isoformat()
     # 3 days x 48 predictions per cycle passes PostgREST's 1000-row cap within a day: page it.
@@ -200,7 +206,8 @@ def recent_performance(loader: SupabaseLoader, horizons: list[int], model_versio
     if not rows:
         return {}
     frame = pd.DataFrame(rows)
-    frame["predicted_demand"] = frame["raw_predicted_demand"].fillna(frame["predicted_demand"])
+    if not score_submitted:
+        frame["predicted_demand"] = frame["raw_predicted_demand"].fillna(frame["predicted_demand"])
     result: dict[int, dict[str, Any]] = {}
     for horizon in horizons:
         subset = frame.loc[frame["horizon_minutes"] == horizon]
@@ -453,7 +460,10 @@ def main() -> None:
 
         active_model = fetch_active_model(loader)
         horizons = sorted({int(target["horizon_minutes"]) for target in cycle["targets"]})
-        performance = recent_performance(loader, horizons, (active_model or {}).get("id"))
+        adjustment = os.environ.get("PULSO_ADJUSTMENT", "").strip().lower() or DEFAULT_ADJUSTMENT
+        # While the ensemble decides what is submitted, judge that: retraining can't fix a raw
+        # model that the injected regime defeats, and the ensemble already routes around it.
+        performance = recent_performance(loader, horizons, (active_model or {}).get("id"), score_submitted=adjustment == "ensemble")
         drift_rows = compute_data_drift(data, active_model) + compute_station_drift(data, active_model)
 
         ingestions = loader.select("ingestion_runs", LATEST_OBSERVATIONS_INGESTION)
@@ -485,7 +495,6 @@ def main() -> None:
 
         cutoff = pd.Timestamp(cycle["data_cutoff"])
         horizon_lookup = target_horizons(cycle)
-        adjustment = os.environ.get("PULSO_ADJUSTMENT", "").strip().lower() or DEFAULT_ADJUSTMENT
         model_values = {(p["station_id"], p["target_at"]): p["value"] for p in predictions}
         if adjustment != "none":
             history = loader.select_all("predictions", {
