@@ -196,6 +196,19 @@ def test_recent_performance_reads_every_page() -> None:
     assert result[15]["wape"] == 0.0 and abs(result[60]["wape"] - 0.5) < 1e-9
 
 
+def test_recent_performance_can_score_the_submitted_values() -> None:
+    from load_supabase import SupabaseLoader
+    from run_forecast_cycle import recent_performance
+
+    # raw model 50% off (the injected regime defeats it), submitted ensemble exact
+    rows = [{"id": i, "station_id": "07111", "horizon_minutes": 15, "predicted_demand": 100.0,
+             "raw_predicted_demand": 150.0, "actual_demand": 100} for i in range(50)]
+    loader = SupabaseLoader.__new__(SupabaseLoader)
+    loader.select = lambda table, params: rows[params["offset"]:params["offset"] + params["limit"]]
+    assert abs(recent_performance(loader, [15], "m")[15]["wape"] - 0.5) < 1e-9
+    assert recent_performance(loader, [15], "m", score_submitted=True)[15]["wape"] == 0.0
+
+
 def _station_frame(days: int = 16, stations: tuple[str, ...] = ("05000", "05100")) -> pd.DataFrame:
     timestamps = pd.date_range("2026-09-01", periods=days * 96, freq="15min", tz="UTC")
     rng = np.random.default_rng(3)

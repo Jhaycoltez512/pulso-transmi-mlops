@@ -231,6 +231,19 @@ tocar nada. Si lo hay:
       ciclo. Un modelo recién entrenado se conserva hasta tener 20
       predicciones evaluadas por horizonte (dos ciclos) y luego se juzga por
       su propio desempeño.
+
+      **Qué valores se evalúan (desde el 2-oct):**
+
+      - Con `PULSO_ADJUSTMENT=ensemble` (el valor por defecto) se evalúa lo que se
+        envió (`predicted_demand`).
+      - En los demás modos se evalúa la salida pura del modelo (`raw_predicted_demand`).
+
+      **Por qué:** durante el drift periódico que inyecta la competencia, el modelo solo queda
+      por encima de su umbral (20–38% de WAPE contra ~16%), mientras el ensamble envía ~90% de
+      accuracy. Juzgar al modelo solo provocaba un reentreno cada dos ciclos (12 en 24 h el
+      1-oct) que no mejoraba lo enviado. Ahora se reentrena cuando falla lo que de verdad se
+      envía. Las reglas 2, 4 y 5 siguen vigilando el envejecimiento del modelo y los cambios en
+      los datos.
    4. `data_drift: {feature} PSI={x} > {umbral}` — PSI de alguna variable
       supera su umbral: 0.25 (estándar de industria para "cambio
       significativo") para `demand`, `rain_forecast` y
