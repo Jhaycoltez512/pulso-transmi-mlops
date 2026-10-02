@@ -1,0 +1,27 @@
+# Temporary: read-only backtest of weighted refinements of the period average. Remove once read.
+name: backtest-periodic-weighted
+
+on:
+  push:
+    branches: [claude/intelligent-bell-np1lix]
+    paths: [.github/workflows/backtest-periodic-weighted.yml, scripts/backtest_periodic_weighted.py]
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e '.[ml]'
+      - name: Backtest weighted refinements (read-only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: cd scripts && python backtest_periodic_weighted.py
