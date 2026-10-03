@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python -m pip install httpx
+      - run: python -m pip install -e .
       - name: Read API samples (read-only)
         env:
           PULSO_API_URL: https://pulso-transmi.72-60-245-2.sslip.io
