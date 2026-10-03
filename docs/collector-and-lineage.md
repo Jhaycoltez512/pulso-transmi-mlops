@@ -449,3 +449,20 @@ expire**, o el disparador deja de funcionar sin ningún aviso — conviene
 poner un recordatorio en la misma fecha de expiración elegida al crearlo.
 Si el token se filtra, se revoca desde la misma página de GitHub sin afectar
 nada más del proyecto.
+
+## Stream schema v2 (2026-10-03)
+
+At 2026-10-03 23:19 UTC (virtual 2026-09-20 12:15) `/v1/stream/observations` started returning
+`schema_version: 2` rows: `demand` was replaced by
+`measurement: {"value": "546.00", "unit": "passengers", "quality": "observed"}` (value as a decimal
+string). Older releases keep the v1 shape, so the stream now mixes both. The raw upsert failed with
+`PGRST204 Could not find the 'measurement' column` and, since the forecast step depends on the sync,
+no cycle could be submitted.
+
+`sync_stream_observations.normalize_rows` now maps both shapes onto the table's own columns
+(`station_id`, `observed_at` and `released_at` in UTC, integer `demand`); extra fields are dropped.
+Rows without a value are skipped (re-read harmlessly next run), and an unknown unit fails the run with
+the reason in `ingestion_runs.error_message` rather than storing demand on a wrong scale. Verified
+read-only against the live API: 13 044 rows (24 v2) normalized, 0 skipped, values continuous with
+the v1 rows. `/v1/context`, `/v1/observations` and the submission schema (`schema_version "1.0"`) did
+not change.
