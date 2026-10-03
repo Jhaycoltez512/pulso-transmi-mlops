@@ -25,3 +25,4 @@ me = client.get("/v1/me"); print("me", me.status_code, me.text[:600])
 subs = client.get("/v1/submissions", params={"limit": 2}); print("submissions", subs.status_code, subs.text[:2500])
 print("cycle", client.get("/v1/forecast-cycles/current").text[:2500])
 print("clock", client.get("/v1/clock").text)
+# rerun
