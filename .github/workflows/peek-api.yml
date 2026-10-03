@@ -24,4 +24,4 @@ jobs:
         env:
           PULSO_API_URL: https://pulso-transmi.72-60-245-2.sslip.io
           PULSO_API_KEY: ${{ secrets.PULSO_API_KEY }}
-        run: python scripts/peek_api.py
+        run: cd scripts && python peek_api.py
