@@ -30,6 +30,8 @@ This module holds the pieces that sit after the model:
 
 from __future__ import annotations
 
+import re
+
 import warnings
 from datetime import timedelta
 
@@ -55,6 +57,18 @@ BREAK_FLOOR = 0.25  # WAPE of the best period copy over the last hour
 BREAK_RATIO = 2.0   # ... and that many times its WAPE over the previous day
 LAG_EXPERTS = tuple(f"lag_{p}h" for p in PERIOD_HOURS)  # single-period copies (kept for backtests)
 PERIODIC_EXPERTS = tuple(f"per_{p}h" for p in PERIOD_HOURS)  # period averaged over PERIODIC_WINDOW
+# Longer periods. The regime that followed the 4h one (from virtual 2026-09-20 12:15) repeats every
+# 8h: copying the value 8h before the target scored 85.4% on 1015 dense forecasts vs 79.6% for the
+# trend expert, and our 2-6h experts could not see it (nor could the break guard, which kept
+# firing). 7-12h also covers the next change the organisers may inject.
+LONG_PERIOD_HOURS = (7, 8, 9, 10, 12)
+ALL_PERIOD_HOURS = (*PERIOD_HOURS, *LONG_PERIOD_HOURS)
+LONG_LAG_EXPERTS = tuple(f"lag_{p}h" for p in LONG_PERIOD_HOURS)
+LONG_PERIODIC_EXPERTS = tuple(f"per_{p}h" for p in LONG_PERIOD_HOURS)
+# Copy of the period, moved half-way to the current level: copy(target - P) + SHIFT_WEIGHT x
+# (now - value P before now). 86.7% on the same 1015 forecasts (full shift 80.8%).
+SHIFT_WEIGHT = 0.5
+SHIFT_EXPERTS = tuple(f"shift_{p}h" for p in ALL_PERIOD_HOURS)
 # Damped-trend persistence: last value + damping x (last-hour slope) x horizon. After the 4h
 # oscillation ended (virtual 2026-09-20 12:15) each station drifts smoothly for hours; on 814
 # dense post-break forecasts damping 0.5 scored 78.0% vs 76.1% for plain persistence (full
@@ -109,7 +123,8 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
     for name, damping in TREND_DAMPING.items():
         # no slope known (gap an hour ago) -> plain persistence
         out[name] = np.clip(out["persistence"].to_numpy() + np.nan_to_num(damping * slope * steps), 0, None)
-    for hours, lag_name, mean_name in zip(PERIOD_HOURS, LAG_EXPERTS, PERIODIC_EXPERTS):
+    for hours in ALL_PERIOD_HOURS:
+        lag_name, mean_name = f"lag_{hours}h", f"per_{hours}h"
         copies = [
             _lookup(table, "demand", out["station_id"], target - timedelta(hours=hours * k))
             for k in range(1, int(PERIODIC_WINDOW / timedelta(hours=hours)) + 1)
@@ -118,6 +133,8 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
         with np.errstate(invalid="ignore"), warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN rows -> NaN, as intended
             out[mean_name] = np.nanmean(np.vstack(copies), axis=0)
+        then = _lookup(table, "demand", out["station_id"], origin - timedelta(hours=hours))
+        out[f"shift_{hours}h"] = np.clip(copies[0] + SHIFT_WEIGHT * (out["persistence"].to_numpy() - then), 0, None)
     return out
 
 
@@ -213,12 +230,14 @@ def expert_frame(frame: pd.DataFrame, model: np.ndarray, experts: tuple[str, ...
     return pd.DataFrame(columns)[list(experts)]
 
 
-def periodic_break(data: pd.DataFrame, cutoff: pd.Timestamp) -> tuple[bool, dict[str, float]]:
-    """Whether the periodic pattern broke in the last hour, from the observations up to cutoff."""
+def periodic_break(data: pd.DataFrame, cutoff: pd.Timestamp, hours: tuple[int, ...] = PERIOD_HOURS) -> tuple[bool, dict[str, float]]:
+    """Whether the periodic pattern broke in the last hour, from the observations up to cutoff.
+
+    hours: the periods the ensemble can copy -- a break only matters if none of them still works."""
     table = data.assign(observed_at=_utc_ns(data["observed_at"]).array)
     y = table.pivot_table(index="observed_at", columns="station_id", values="demand", aggfunc="last").sort_index()
     end = pd.Timestamp(cutoff).tz_convert("UTC") if pd.Timestamp(cutoff).tzinfo else pd.Timestamp(cutoff).tz_localize("UTC")
-    y = y.loc[(y.index > end - BREAK_BASELINE - BREAK_RECENT - timedelta(hours=max(PERIOD_HOURS))) & (y.index <= end)]
+    y = y.loc[(y.index > end - BREAK_BASELINE - BREAK_RECENT - timedelta(hours=max(hours))) & (y.index <= end)]
 
     def wape(hours: int, start: pd.Timestamp, stop: pd.Timestamp) -> float:
         now = y.loc[(y.index > start) & (y.index <= stop)]
@@ -228,8 +247,8 @@ def periodic_break(data: pd.DataFrame, cutoff: pd.Timestamp) -> tuple[bool, dict
         total = now.where(mask).sum().sum()
         return float((now - then).abs().where(mask).sum().sum() / total) if total > 0 else float("nan")
 
-    recent = min((wape(h, end - BREAK_RECENT, end) for h in PERIOD_HOURS), default=float("nan"))
-    baseline = min((wape(h, end - BREAK_RECENT - BREAK_BASELINE, end - BREAK_RECENT) for h in PERIOD_HOURS), default=float("nan"))
+    recent = min((wape(h, end - BREAK_RECENT, end) for h in hours), default=float("nan"))
+    baseline = min((wape(h, end - BREAK_RECENT - BREAK_BASELINE, end - BREAK_RECENT) for h in hours), default=float("nan"))
     broke = bool(np.isfinite(recent) and np.isfinite(baseline) and recent > BREAK_FLOOR and recent > BREAK_RATIO * baseline)
     return broke, {"recent_wape": round(recent, 4), "baseline_wape": round(baseline, 4)}
 
@@ -262,9 +281,10 @@ def production_adjust(
     if mode != "ensemble":
         raise ValueError(f"unknown adjustment mode {mode!r}")
     broke = False
-    periodic = (*LAG_EXPERTS, *PERIODIC_EXPERTS)
-    if break_guard and any(e in periodic for e in experts):
-        broke, _ = periodic_break(data, frame["observed_at"].max())
+    periodic = tuple(e for e in experts if re.fullmatch(r"(lag|per|shift)_\d+h", e))
+    if break_guard and periodic:
+        hours = tuple(sorted({int(re.search(r"\d+", e).group()) for e in periodic}))
+        broke, _ = periodic_break(data, frame["observed_at"].max(), hours)
         if broke:
             experts = tuple(e for e in experts if e not in periodic)
             window = min(window, BREAK_RECENT)
