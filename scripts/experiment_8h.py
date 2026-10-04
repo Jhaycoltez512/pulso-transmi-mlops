@@ -1,151 +1,133 @@
-"""Read-only experiment: candidate forecasters on the 8h regime (from virtual 2026-09-20 12:15).
+"""Read-only experiment: periodic forecasters vs what we submitted, on the 4h and the 8h regimes.
 
-Every candidate predicts y[t + k] (k = 1..4 steps of 15 min, the cycle horizons) from data up to
-the origin t only. Scored like the leaderboard: 1 - WAPE per hourly origin (a "cycle", 48
-predictions), then averaged; also on every 15-min origin. Missing station-periods are filled the
-way production fills them (last known value).
+Every candidate predicts y[t + k] (k = 1..4 steps of 15 min) from data up to the origin t only.
+Scored like the leaderboard: 1 - WAPE per hourly origin (48 predictions) then averaged per regime.
+"auto" candidates pick the period themselves: the P (2-12h, 15-min grid) whose 3-point smoothed copy
+had the lowest WAPE over the last AUTO_LOOKBACK at the origin.
 
     python scripts/experiment_8h.py
 """
 
 from __future__ import annotations
 
+import os
 import warnings
-from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 
-from load_supabase import load_dotenv
+from load_supabase import SupabaseLoader, load_dotenv
 from run_forecast_cycle import fill_gaps
 from train_baseline import load_training_data
 
 warnings.simplefilter("ignore", category=RuntimeWarning)
-STEP = pd.Timedelta(minutes=15)
-REGIME = pd.Timestamp("2026-09-20T12:15:00Z")
-P8 = 32  # 8h in steps
-EVAL_FROM = pd.Timestamp("2026-09-21T00:00:00Z")  # 11h45 of regime: one full period + margin
+REGIMES = {
+    "4h (09-19 06:00 - 09-20 11:00)": (pd.Timestamp("2026-09-19T06:00Z"), pd.Timestamp("2026-09-20T11:00Z")),
+    "8h (09-21 00:00 -)": (pd.Timestamp("2026-09-21T00:00Z"), pd.Timestamp("2030-01-01T00:00Z")),
+}
+PERIODS = list(range(8, 49))  # 2h..12h in 15-min steps
+AUTO_LOOKBACK = 16  # 4h of origins to judge the period
 
 
-def series() -> tuple[np.ndarray, pd.DatetimeIndex, list[str], np.ndarray]:
+def series():
     raw = load_training_data()[["station_id", "observed_at", "demand"]].copy()
     raw["observed_at"] = pd.to_datetime(raw["observed_at"], utc=True)
     truth = raw.pivot_table(index="observed_at", columns="station_id", values="demand", aggfunc="last")
     filled = fill_gaps(raw).pivot_table(index="observed_at", columns="station_id", values="demand", aggfunc="last")
-    filled = filled.loc[filled.index >= REGIME - pd.Timedelta(hours=30)]
-    truth = truth.reindex(filled.index)
-    return filled.to_numpy(float), filled.index, list(filled.columns), truth.to_numpy(float)
+    filled = filled.loc[filled.index >= pd.Timestamp("2026-09-17T00:00Z")]
+    return filled.to_numpy(float), filled.index, list(filled.columns), truth.reindex(filled.index).to_numpy(float)
 
 
-def sm(y: np.ndarray, i: int, w: int) -> np.ndarray:
+def sm(y, i, w):
     return np.nanmean(y[i - w:i + w + 1], axis=0)
 
 
-def harmonic(y: np.ndarray, t: int, k: int, hours: int, m: int, trend: bool) -> np.ndarray:
-    """Least squares per station on the last `hours` with an 8h Fourier basis of order m."""
-    n = hours * 4
-    s = np.arange(t - n + 1, t + 1)
-    cols = [np.ones(n)]
-    for j in range(1, m + 1):
-        cols += [np.cos(2 * np.pi * j * s / P8), np.sin(2 * np.pi * j * s / P8)]
-    if trend:
-        cols.append((s - t) / n)
-    X = np.column_stack(cols)
-    tt = t + k
-    xf = [1.0]
-    for j in range(1, m + 1):
-        xf += [np.cos(2 * np.pi * j * tt / P8), np.sin(2 * np.pi * j * tt / P8)]
-    if trend:
-        xf.append(k / n)
-    Y = y[t - n + 1:t + 1]
-    beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
-    return np.asarray(xf) @ beta
+def harmonic(y, t, k, period, window, m):
+    s = np.arange(t - window + 1, t + 1)
+    def basis(x):
+        cols = [np.ones_like(x, dtype=float)]
+        for j in range(1, m + 1):
+            cols += [np.cos(2 * np.pi * j * x / period), np.sin(2 * np.pi * j * x / period)]
+        return np.column_stack(cols)
+    beta, *_ = np.linalg.lstsq(basis(s), y[t - window + 1:t + 1], rcond=None)
+    return (basis(np.array([t + k])) @ beta)[0]
 
 
-def candidates(y: np.ndarray, t: int, k: int) -> dict[str, np.ndarray]:
-    last = y[t]
-    out = {"persistencia": last, "lag8": y[t + k - P8]}
-    for w in (1, 2, 3):
-        out[f"sm8_w{w}"] = sm(y, t + k - P8, w)
-    # residual correction: the copy's error at the origin persists for a while
-    for w in (1, 2):
-        base_t, base_k = sm(y, t - P8, w), sm(y, t + k - P8, w)
-        resid = last - base_t
-        resid4 = np.mean([y[t - j] - sm(y, t - j - P8, w) for j in range(4)], axis=0)
-        for a in (0.3, 0.5, 0.7, 1.0):
-            out[f"sm8_w{w}+res{a}"] = base_k + a * resid
-            out[f"sm8_w{w}+res{a}_d"] = base_k + a * (0.8 ** (k - 1)) * resid
-            out[f"sm8_w{w}+res4_{a}"] = base_k + a * resid4
-        # amplitude/level ratio over the last hour
-        lvl_now, lvl_then = np.mean(y[t - 3:t + 1], axis=0), np.mean(y[t - 3 - P8:t + 1 - P8], axis=0)
-        ratio = np.clip((lvl_now + 20) / (lvl_then + 20), 0.5, 2.0)
-        for a in (0.3, 0.5):
-            out[f"sm8_w{w}*ratio{a}"] = base_k * (1 + a * (ratio - 1))
-    # two periods back (amplitude may drift)
-    if t + k - 2 * P8 - 2 >= 0:
-        s1, s2 = sm(y, t + k - P8, 1), sm(y, t + k - 2 * P8, 1)
-        out["sm8+sm16 (0.75/0.25)"] = 0.75 * s1 + 0.25 * s2
-        out["sm8+sm16 (2s1-s2) amortiguado"] = s1 + 0.3 * (s1 - s2)
-    for hours in (8, 12, 16):
-        for m in (1, 2, 3):
-            for tr in (False, True):
-                try:
-                    out[f"armonico {hours}h m{m}{' +tend' if tr else ''}"] = harmonic(y, t, k, hours, m, tr)
-                except Exception:
-                    pass
-    return {name: np.clip(v, 0, None) for name, v in out.items()}
+def best_period(y, t):
+    """Period whose smoothed copy fitted the last AUTO_LOOKBACK observed values best (pooled WAPE)."""
+    obs = y[t - AUTO_LOOKBACK + 1:t + 1]
+    scores = {}
+    for p in PERIODS:
+        pred = np.stack([sm(y, i - p, 1) for i in range(t - AUTO_LOOKBACK + 1, t + 1)])
+        scores[p] = np.nansum(np.abs(pred - obs)) / np.nansum(obs)
+    return min(scores, key=scores.get), min(scores.values())
 
 
-def ridge_preds(y: np.ndarray, origins: list[int], lam: float = 1e3) -> dict[tuple[int, int], np.ndarray]:
-    """Per-horizon ridge on [y_t, y_t-1, y_t-2, sm8 at target (w1), lag8 target-1..+1, sm8 at origin],
-    pooled over stations, refit walk-forward on regime origins whose target is already known."""
-    def feats(t, k):
-        return np.column_stack([y[t], y[t - 1], y[t - 2], sm(y, t + k - P8, 1), y[t + k - P8 - 1], y[t + k - P8], y[t + k - P8 + 1], sm(y, t - P8, 1)])
-    out = {}
-    for k in range(1, 5):
-        for t in origins:
-            train = [s for s in range(t - 40, t - k + 1) if s - P8 - 2 >= 0 and s + k <= t]
-            if len(train) < 8:
-                continue
-            X = np.vstack([feats(s, k) for s in train])
-            Y = np.concatenate([y[s + k] for s in train])
-            mask = np.isfinite(X).all(1) & np.isfinite(Y)
-            X, Y = X[mask], Y[mask]
-            A = X.T @ X + lam * np.eye(X.shape[1])
-            beta = np.linalg.solve(A, X.T @ Y)
-            out[(t, k)] = np.clip(feats(t, k) @ beta, 0, None)
-    return out
+def candidates(y, t, k, regime_period, auto_p):
+    out = {"persistencia": y[t]}
+    for name, p in (("oraculo", regime_period), ("auto", auto_p)):
+        out[f"{name} copia"] = y[t + k - p]
+        out[f"{name} sm w1"] = sm(y, t + k - p, 1)
+        out[f"{name} sm w2"] = sm(y, t + k - p, 2)
+        for wmult in (1, 1.5, 2):
+            for m in (2, 3):
+                out[f"{name} armonico {wmult}P m{m}"] = harmonic(y, t, k, p, int(wmult * p), m)
+        h = harmonic(y, t, k, p, p, 2)
+        out[f"{name} (armonico P m2 + sm w2)/2"] = (h + sm(y, t + k - p, 2)) / 2
+        res = np.mean([y[t - j] - harmonic(y, t - j - k, k, p, p, 2) for j in range(2)], axis=0) if False else None
+    return {n: np.clip(v, 0, None) for n, v in out.items()}
 
 
-def main() -> None:
+def main():
     load_dotenv()
     y, index, stations, truth = series()
-    start = int(np.searchsorted(index, EVAL_FROM))
-    origins = [t for t in range(start, len(index) - 4)]
-    print(f"{len(stations)} stations, origins {index[origins[0]]} -> {index[origins[-1]]} ({len(origins)})")
-    ridge = ridge_preds(y, origins)
-    rows = []
-    for t in origins:
-        for k in range(1, 5):
-            actual = truth[t + k]
-            preds = candidates(y, t, k)
-            if (t, k) in ridge:
-                preds["ridge"] = ridge[(t, k)]
-            if "sm8_w1+res0.5_d" in preds and "ridge" in preds:
-                preds["media(sm8_w1+res, ridge)"] = (preds["sm8_w1+res0.5_d"] + preds["ridge"]) / 2
-            for name, p in preds.items():
-                rows.append((index[t], index[t].minute == 0, k, name, np.nansum(np.abs(p - actual)), np.nansum(np.where(np.isnan(actual), np.nan, actual))))
-    frame = pd.DataFrame(rows, columns=["origin", "hourly", "k", "cand", "err", "act"])
-    dense = frame.groupby("cand")[["err", "act"]].sum()
-    dense = 100 * (1 - dense["err"] / dense["act"])
-    hourly = frame.loc[frame["hourly"]].groupby(["cand", "origin"])[["err", "act"]].sum()
-    per_cycle = (100 * (1 - hourly["err"] / hourly["act"])).groupby("cand")
-    by_k = frame.groupby(["cand", "k"])[["err", "act"]].sum()
-    by_k = (100 * (1 - by_k["err"] / by_k["act"])).unstack()
-    table = pd.DataFrame({"ciclos (media)": per_cycle.mean(), "min ciclo": per_cycle.min(), "n ciclos": per_cycle.size(), "denso": dense}).join(by_k.add_prefix("h"))
+    loader = SupabaseLoader(os.environ["SUPABASE_URL"], os.getenv("SUPABASE_SECRET_KEY") or os.environ["SUPABASE_KEY"])
+    sent = pd.DataFrame(loader.select_all("predictions", {
+        "select": "station_id,target_at,predicted_demand,forecast_runs!inner(data_cutoff),submissions:forecast_runs!inner(submissions!inner(status))",
+        "target_at": "gt.2026-09-19T00:00:00Z",
+    }, order="id.asc")) if False else pd.DataFrame(loader.select_all("predictions", {
+        "select": "station_id,target_at,predicted_demand,forecast_runs!inner(data_cutoff)",
+        "target_at": "gt.2026-09-19T00:00:00Z",
+    }, order="id.asc"))
+    loader.close()
+    sent["cutoff"] = pd.to_datetime(sent["forecast_runs"].map(lambda r: r["data_cutoff"]), utc=True)
+    sent["target_at"] = pd.to_datetime(sent["target_at"], utc=True)
+    sent = sent.groupby(["cutoff", "target_at", "station_id"])["predicted_demand"].last()
+    col = {s: i for i, s in enumerate(stations)}
+    pos = {ts: i for i, ts in enumerate(index)}
+
+    rows, chosen = [], []
+    for label, (start, end) in REGIMES.items():
+        regime_period = 16 if label.startswith("4h") else 32
+        for t, ts in enumerate(index):
+            if ts < start or ts > end or ts.minute != 0 or t + 4 >= len(index):
+                continue
+            auto_p, auto_err = best_period(y, t)
+            chosen.append((label, ts, auto_p / 4, round(auto_err, 3)))
+            for k in range(1, 5):
+                actual = truth[t + k]
+                preds = candidates(y, t, k, regime_period, auto_p)
+                key = [(ts, index[t + k], s) for s in stations]
+                if all(kk in sent.index for kk in key):
+                    preds["ENVIADO"] = np.array([sent[kk] for kk in key], dtype=float)
+                for name, p in preds.items():
+                    rows.append((label, ts, k, name, np.nansum(np.abs(p - actual)), np.nansum(np.where(np.isnan(p), np.nan, actual))))
+    frame = pd.DataFrame(rows, columns=["regime", "origin", "k", "cand", "err", "act"])
+    cyc = frame.groupby(["regime", "cand", "origin"])[["err", "act"]].sum()
+    cyc = 100 * (1 - cyc["err"] / cyc["act"])
+    table = cyc.groupby(["regime", "cand"]).agg(["mean", "min", "size"]).round(2)
     pd.set_option("display.width", 250)
-    pd.set_option("display.max_rows", 200)
-    print(table.sort_values("ciclos (media)", ascending=False).round(2).to_string())
+    pd.set_option("display.max_rows", 300)
+    for regime in REGIMES:
+        print(f"\n=== regimen {regime} (1 - WAPE por ciclo) ===")
+        print(table.loc[regime].sort_values("mean", ascending=False).to_string())
+    ch = pd.DataFrame(chosen, columns=["regime", "origin", "auto_period_h", "copy_wape"])
+    print("\nperiodo elegido por 'auto':")
+    print(ch.groupby("regime")["auto_period_h"].value_counts().to_string())
+    print("\nultimos ciclos (enviado vs mejores):")
+    last = cyc.unstack("cand").loc["8h (09-21 00:00 -)"]
+    keep = [c for c in ["ENVIADO", "oraculo sm w1", "oraculo sm w2", "oraculo armonico 1P m2", "auto armonico 1P m2", "auto sm w2"] if c in last.columns]
+    print(last[keep].round(1).to_string())
 
 
 if __name__ == "__main__":
