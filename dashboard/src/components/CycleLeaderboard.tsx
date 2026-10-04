@@ -86,11 +86,14 @@ export function CycleLeaderboard() {
       return point;
     });
     const hasCycleData = rows.some((r) => r.cycle_accuracy != null);
+    // A cycle where nobody has a result could not be derived (e.g. an actual was missing), which
+    // is not the same as a participant skipping it.
+    const derived = new Set(rows.filter((r) => r.cycle_accuracy != null).map((r) => r.resolved_cycles));
     const latest = (p: Participant) => [...cycles].reverse().map((c) => p.byCycle.get(c)).find((v) => v != null) ?? null;
     const shown = series.flatMap((p) => cycles.map((c) => p.byCycle.get(c))).filter((v): v is number => v != null);
     // Zoom to the band the shown series live in (never below 0): a 0-100 axis flattens the race.
     const yMin = shown.length ? Math.max(0, Math.floor((Math.min(...shown) - 5) / 10) * 10) : 0;
-    return { cycles, tableCycles, capturedAt, ranked, series, points, hasCycleData, latest, yMin };
+    return { cycles, tableCycles, capturedAt, ranked, series, points, hasCycleData, derived, latest, yMin };
   }, [rows]);
 
   return (
@@ -141,7 +144,7 @@ export function CycleLeaderboard() {
                     const at = view.capturedAt.get(Number(c));
                     return `Ciclo ${c}${at ? ` · ${hourFormat.format(new Date(at))}` : ""}`;
                   }}
-                  formatter={(value) => [value == null ? "no envió" : `${Number(value).toFixed(1)}%`]}
+                  formatter={(value) => [value == null ? "sin resultado" : `${Number(value).toFixed(1)}%`]}
                   cursor={{ stroke: "#475569", strokeWidth: 1 }}
                 />
                 {view.series.map((p, i) => (
@@ -194,7 +197,13 @@ export function CycleLeaderboard() {
                       const v = p.byCycle.get(c);
                       return (
                         <td key={c} className="px-2 py-1 text-right tabular-nums">
-                          {v == null ? <span className="text-slate-600">{p.byCycle.has(c) ? "no envió" : "—"}</span> : v.toFixed(1)}
+                          {v == null ? (
+                            <span className="text-slate-600" title={view.derived.has(c) ? undefined : "Sin dato: faltan reales de este ciclo"}>
+                              {p.byCycle.has(c) && view.derived.has(c) ? "no envió" : "—"}
+                            </span>
+                          ) : (
+                            v.toFixed(1)
+                          )}
                         </td>
                       );
                     })}
