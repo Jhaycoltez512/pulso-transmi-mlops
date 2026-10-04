@@ -52,6 +52,20 @@ def cycle_results(previous: list[dict[str, Any]], current: list[dict[str, Any]],
     return out
 
 
+def fill_missing_demand(observations: pd.DataFrame, limit: int = 4) -> pd.DataFrame:
+    """Interpolate station-periods the API left out of the stream (since 2026-10-04 it skips a
+    station now and then). Without this, one missing actual made A_n unknown and every
+    participant's per-cycle result blank (shown as "no envió" on the dashboard). Gaps of at most
+    `limit` periods between known values are filled linearly; the result is then approximate by
+    roughly that value's share of the cycle's demand."""
+    y = observations.pivot_table(index="observed_at", columns="station_id", values="demand", aggfunc="last")
+    y = y.reindex(pd.date_range(y.index.min(), y.index.max(), freq="15min"))
+    y = y.interpolate(method="time", limit=limit, limit_area="inside")
+    out = y.stack().rename("demand").reset_index()
+    out.columns = ["observed_at", "station_id", "demand"]
+    return out
+
+
 def demand_totals(loader: SupabaseLoader, starts_at: str, counts: list[int]) -> dict[int, float | None]:
     """Actual demand over every target of the first n cycles opened since starts_at, for each n."""
     targets = pd.DataFrame(loader.select_all("forecast_targets", {
@@ -63,13 +77,15 @@ def demand_totals(loader: SupabaseLoader, starts_at: str, counts: list[int]) -> 
     targets["opens_at"] = pd.to_datetime(targets["forecast_cycles"].map(lambda c: c["opens_at"]), utc=True)
     targets["target_at"] = pd.to_datetime(targets["target_at"], utc=True)
     order = targets.drop_duplicates("cycle_id").sort_values("opens_at")["cycle_id"].tolist()
+    pad = pd.Timedelta(hours=2)
     observations = pd.DataFrame(loader.select_all("observations", {
         "select": "station_id,observed_at,demand",
-        "observed_at": [f"gte.{targets['target_at'].min().isoformat()}", f"lte.{targets['target_at'].max().isoformat()}"],
+        "observed_at": [f"gte.{(targets['target_at'].min() - pad).isoformat()}", f"lte.{(targets['target_at'].max() + pad).isoformat()}"],
     }, order="observed_at.asc,station_id.asc"))
     if observations.empty:
         return {n: None for n in counts}
     observations["observed_at"] = pd.to_datetime(observations["observed_at"], utc=True)
+    observations = fill_missing_demand(observations)
     merged = targets.merge(observations.rename(columns={"observed_at": "target_at"}), on=["station_id", "target_at"], how="left")
     result: dict[int, float | None] = {}
     for n in counts:
@@ -77,6 +93,38 @@ def demand_totals(loader: SupabaseLoader, starts_at: str, counts: list[int]) -> 
         complete = n <= len(order) and part["demand"].notna().all()
         result[n] = float(part["demand"].sum()) if complete else None
     return result
+
+
+BACKFILL_SNAPSHOTS = 12
+
+
+def backfill_cycle_results(loader: SupabaseLoader) -> None:
+    """Re-derive recent cumulative snapshots whose per-cycle results all came out blank (e.g. an
+    actual was missing when they were stored)."""
+    stored = loader.select(TABLE, {"board_window": "eq.cumulative", "select": "snapshot_key,resolved_cycles,starts_at,cycle_accuracy",
+                                   "order": "resolved_cycles.desc", "limit": 40 * BACKFILL_SNAPSHOTS})
+    frame = pd.DataFrame(stored)
+    if frame.empty:
+        return
+    blank = frame.groupby("resolved_cycles").agg(starts_at=("starts_at", "first"), known=("cycle_accuracy", "count"))
+    blank = blank.loc[blank["known"] == 0].sort_index().tail(BACKFILL_SNAPSHOTS)
+    for resolved, item in blank.iterrows():
+        resolved = int(resolved)
+        previous = loader.select(TABLE, {"board_window": "eq.cumulative", "snapshot_key": f"eq.{resolved - 1}"})
+        if not previous:
+            continue
+        current = loader.select(TABLE, {"board_window": "eq.cumulative", "snapshot_key": f"eq.{resolved}"})
+        totals = demand_totals(loader, item["starts_at"], [resolved - 1, resolved])
+        results = cycle_results(previous, current, resolved, totals[resolved - 1], totals[resolved])
+        if not results:
+            continue
+        rows = [{**{k: row[k] for k in row if k not in ("id", "captured_at")}, "demand_total": totals[resolved],
+                 "cycle_wape": results[row["display_name"]][0] if results.get(row["display_name"]) else None,
+                 "cycle_accuracy": results[row["display_name"]][1] if results.get(row["display_name"]) else None}
+                for row in current]
+        loader.upsert(TABLE, rows, "board_window,snapshot_key,display_name")
+        mine = next((r for r in rows if r["is_me"]), None)
+        print(f"Leaderboard backfill: cycle {resolved} re-derived; me {mine and mine['cycle_accuracy']}")
 
 
 def main() -> None:
@@ -118,6 +166,7 @@ def main() -> None:
             mine = next((r for r in rows if r["is_me"]), None)
             print(f"Leaderboard {window}: stored {len(rows)} rows (key {key}); me rank {mine and mine['rank']}, "
                   f"cycle accuracy {mine and mine['cycle_accuracy']}")
+        backfill_cycle_results(loader)
     finally:
         loader.close()
 
