@@ -260,3 +260,15 @@ def test_break_guard_uses_the_periods_the_ensemble_can_copy() -> None:
     data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": 500 + 400 * np.sin(phase)})
     assert periodic_break(data, times[-1], hours=(2, 3, 4, 5, 6, 8))[0] is False
     assert periodic_break(data, times[-1], hours=(8,))[1]["recent_wape"] < 0.01
+
+
+def test_smoothed_copy_averages_the_period_value_with_its_neighbours() -> None:
+    from forecast_adjustments import reference_inputs
+
+    times = pd.date_range("2026-09-20T00:00Z", periods=40, freq="15min")
+    data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": np.arange(40, dtype=float) * 10})
+    cutoff = times[-1]  # 09:45; target 10:00 -> 8h before is 02:00 (index 8)
+    frame = pd.DataFrame({"station_id": "A", "observed_at": cutoff, "target_at": [cutoff + pd.Timedelta(minutes=15)]})
+    out = reference_inputs(data, frame)
+    assert out["lag_8h"].iloc[0] == 80.0
+    assert out["sm_8h"].iloc[0] == (70.0 + 80.0 + 90.0) / 3

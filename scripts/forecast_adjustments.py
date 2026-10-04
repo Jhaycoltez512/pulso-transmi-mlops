@@ -69,6 +69,11 @@ LONG_PERIODIC_EXPERTS = tuple(f"per_{p}h" for p in LONG_PERIOD_HOURS)
 # (now - value P before now). 86.7% on the same 1015 forecasts (full shift 80.8%).
 SHIFT_WEIGHT = 0.5
 SHIFT_EXPERTS = tuple(f"shift_{p}h" for p in ALL_PERIOD_HOURS)
+# Smoothed copy: mean of the values P before the target and 15 min either side. The 8h wave is
+# smooth and each 15-min value is noisy, so the 3-point mean cancels part of the noise without
+# moving the wave: 91.93% vs 90.14% for the plain 8h copy (and 90.43% submitted) on the first 250
+# live 8h-regime forecasts; ahead of the plain copy on 11 of 12 cycles.
+SMOOTH_EXPERTS = tuple(f"sm_{p}h" for p in ALL_PERIOD_HOURS)
 # Damped-trend persistence: last value + damping x (last-hour slope) x horizon. After the 4h
 # oscillation ended (virtual 2026-09-20 12:15) each station drifts smoothly for hours; on 814
 # dense post-break forecasts damping 0.5 scored 78.0% vs 76.1% for plain persistence (full
@@ -133,6 +138,10 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
         with np.errstate(invalid="ignore"), warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN rows -> NaN, as intended
             out[mean_name] = np.nanmean(np.vstack(copies), axis=0)
+        neighbours = [_lookup(table, "demand", out["station_id"], target - timedelta(hours=hours) + step * PERIOD) for step in (-1, 1)]
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            out[f"sm_{hours}h"] = np.nanmean(np.vstack([copies[0], *neighbours]), axis=0)
         then = _lookup(table, "demand", out["station_id"], origin - timedelta(hours=hours))
         out[f"shift_{hours}h"] = np.clip(copies[0] + SHIFT_WEIGHT * (out["persistence"].to_numpy() - then), 0, None)
     return out
@@ -281,7 +290,7 @@ def production_adjust(
     if mode != "ensemble":
         raise ValueError(f"unknown adjustment mode {mode!r}")
     broke = False
-    periodic = tuple(e for e in experts if re.fullmatch(r"(lag|per|shift)_\d+h", e))
+    periodic = tuple(e for e in experts if re.fullmatch(r"(lag|per|shift|sm)_\d+h", e))
     if break_guard and periodic:
         hours = tuple(sorted({int(re.search(r"\d+", e).group()) for e in periodic}))
         broke, _ = periodic_break(data, frame["observed_at"].max(), hours)
