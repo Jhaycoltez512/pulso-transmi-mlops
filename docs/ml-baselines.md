@@ -648,3 +648,25 @@ Repetición sobre 60 ciclos reales (`scripts/backtest_regime_switch.py`):
 
 Se activa con ventana de 2 h: mejora en ambos regímenes y la de 4 h se adapta más lento tras un
 cambio.
+
+## Ajuste armónico y ensamble reducido (2026-10-04)
+
+Experimento (`scripts/experiment_8h.py`) sobre los ciclos del régimen 8 h: el ajuste armónico por
+estación (mínimos cuadrados con base de Fourier de periodo P, orden 2, sobre las últimas max(P, 8 h))
+dio 92,5 %, la copia suavizada ±30 min 92,0 %, ±15 min 91,9 %, ridge 86,9 %; en el régimen 4 h el
+armónico de 4 h con ventana de 8 h dio 93,2 % vs 91,9 % enviado. Lo enviado en esos ciclos promedió
+~89,9 %: con ~45 expertos y 2 h de historia los pesos perseguían ruido. Detectar el periodo de forma
+automática funciona en el régimen 8 h pero falla a veces en el 4 h (elige 12 h), así que el periodo
+lo sigue eligiendo el ensamble.
+
+Nuevo experto `harm_Ph` para P = 2–12 h y conjunto reducido: modelo, persistencia, día comparable,
+tendencia, `sm_Ph` y `harm_Ph` (sin `lag/per/shift`). Repetición sobre 59 ciclos reales:
+
+| variante | régimen 4h (31) | régimen 8h (13) | desde 09-21 03:00 (7) | todo (59) |
+|---|---|---|---|---|
+| producción (PR #18) | 92,99 | 90,03 | 91,80 | 89,27 |
+| + armónicos, 2 h p6 | 93,25 | 90,67 | 92,34 | 89,59 |
+| + armónicos, 4 h p12 | 93,35 | 89,34 | 92,47 | 89,27 |
+| **reducido, 2 h p6** | 93,28 | **90,82** | **92,53** | **89,64** |
+| reducido, 4 h p12 | 93,31 | 88,89 | 92,56 | 89,15 |
+| `harm_8h` solo | 93,21 | 92,08 | 92,49 | 82,81 |
