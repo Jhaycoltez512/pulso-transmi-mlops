@@ -29,8 +29,7 @@ import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
 from forecast_adjustments import (
-    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, SMOOTH_EXPERTS,
-    TREND_EXPERTS,
+    EXPERTS, HARMONIC_EXPERTS, SMOOTH_EXPERTS, TREND_EXPERTS,
     production_adjust,
 )
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
@@ -117,12 +116,12 @@ ENSEMBLE_BREAK_GUARD = True
 # 7-12h periods and level-shifted copies: the regime after the 4h one repeats every 8h. Replayed on
 # 44 live cycles with a 2h weight window: 87.4% vs 78.4% on the 6 cycles where the 8h copy is
 # usable, 92.80 vs 93.06 in the 4h regime.
-ENSEMBLE_EXPERTS = (
-    *EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS, *LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS, *SHIFT_EXPERTS,
-    # Smoothed copies (forecast_adjustments.SMOOTH_EXPERTS), replayed on 60 live cycles: 91.61 vs
-    # 90.09 since the 8h experts went live, 92.99 vs 92.75 in the 4h regime.
-    *SMOOTH_EXPERTS,
-)
+# Lean set since 2026-10-04: model, persistence, comparable day, damped trend, and per period
+# (2-12h) the smoothed copy and a harmonic fit. With ~45 experts and 2h of history the weights
+# chased noise and diluted the best periodic signal; the raw lag/per/shift copies are dominated by
+# their smoothed/fitted versions. Replayed on 59 live cycles: 92.53 vs 91.80 since the 8h experts
+# went live, 90.82 vs 90.03 on the 8h regime, 93.28 vs 92.99 on the 4h regime, 89.64 vs 89.27 overall.
+ENSEMBLE_EXPERTS = (*EXPERTS, *TREND_EXPERTS, *SMOOTH_EXPERTS, *HARMONIC_EXPERTS)
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
