@@ -17,22 +17,30 @@ from datetime import timedelta
 import numpy as np
 import pandas as pd
 
-from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, production_adjust
+from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, production_adjust, reference_inputs
+from run_forecast_cycle import fill_gaps
 from load_supabase import SupabaseLoader, load_dotenv
 from train_baseline import load_training_data
 
 REGIME_START = pd.Timestamp("2026-09-18T05:00:00Z")
 BREAK = pd.Timestamp("2026-09-20T12:00:00Z")
 EXPERT_SET = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS)
-VARIANTS = {"prod 4h p6": (4, 6.0, False), "guard 4h p6": (4, 6.0, True), "guard 4h p3": (4, 3.0, True), "1h p6": (1, 6.0, False)}
-CYCLES = 30
+# name: (window hours, power, break guard, extra experts)
+VARIANTS = {
+    "prod (guarda)": (4, 6.0, True, ()),
+    "+trend 0.5": (4, 6.0, True, ("trend",)),
+    "+trend 0.3": (4, 6.0, True, ("trend_03",)),
+    "+trend 1.0": (4, 6.0, True, ("trend_full",)),
+}
+CYCLES = 40
 
 
 def main() -> None:
     load_dotenv()
-    data = load_training_data()[["station_id", "observed_at", "demand"]].copy()
-    data["observed_at"] = pd.to_datetime(data["observed_at"], utc=True)
-    actual = data.set_index(["station_id", "observed_at"])["demand"]
+    raw = load_training_data()[["station_id", "observed_at", "demand"]].copy()
+    raw["observed_at"] = pd.to_datetime(raw["observed_at"], utc=True)
+    actual = raw.set_index(["station_id", "observed_at"])["demand"]  # real values only: gaps stay NaN
+    data = fill_gaps(raw)  # what production predicts from
     last_obs = data["observed_at"].max()
     loader = SupabaseLoader(os.environ["SUPABASE_URL"], os.getenv("SUPABASE_SECRET_KEY") or os.environ["SUPABASE_KEY"])
     sent = pd.DataFrame(loader.select_all("predictions", {
@@ -48,23 +56,23 @@ def main() -> None:
     rows = []
     cutoffs = sorted(c for c in sent["cutoff"].unique() if c >= REGIME_START)[-CYCLES:]
     for cutoff, cycle in sent.loc[sent["cutoff"].isin(cutoffs)].groupby("cutoff"):
-        if cycle["target_at"].max() > last_obs:
-            continue
         recent = data.loc[(data["observed_at"] > cutoff - timedelta(days=15)) & (data["observed_at"] <= cutoff)]
         frame = cycle.rename(columns={"raw": "model"})[["station_id", "horizon_minutes", "target_at", "model"]].assign(observed_at=cutoff).reset_index(drop=True)
         truth = np.array([actual.get((s, t), np.nan) for s, t in zip(frame["station_id"], frame["target_at"])], dtype=float)
-        if np.isnan(truth).any():
+        known = ~np.isnan(truth)
+        if known.sum() < 24:
             continue
-        score = lambda v: 100 * max(0.0, 1 - np.abs(np.asarray(v, dtype=float) - truth).sum() / truth.sum())
-        last = np.array([actual.get((s, cutoff), np.nan) for s in frame["station_id"]], dtype=float)
-        row = {"cutoff": cutoff, "enviado": score(cycle["predicted_demand"]), "modelo": score(frame["model"]), "persistencia": score(last)}
+        score = lambda v: 100 * max(0.0, 1 - np.abs(np.asarray(v, dtype=float)[known] - truth[known]).sum() / truth[known].sum())
+        ref = reference_inputs(recent, frame)
+        row = {"cutoff": cutoff, "reales": int(known.sum()), "enviado": score(cycle["predicted_demand"]), "modelo": score(frame["model"]),
+               "persistencia": score(ref["persistence"]), "trend 0.5 solo": score(ref["trend"])}
         past_all = sent.loc[(sent["target_at"] <= cutoff) & (sent["target_at"] > cutoff - timedelta(hours=6))].rename(columns={"raw": "model"})
         past_all = past_all.assign(actual=[actual.get((s, t), np.nan) for s, t in zip(past_all["station_id"], past_all["target_at"])]).dropna(subset=["actual"])
-        for name, (hours, power, guard) in VARIANTS.items():
+        for name, (hours, power, guard, extra) in VARIANTS.items():
             values, info = production_adjust(recent, frame, past_all[["station_id", "horizon_minutes", "target_at", "model", "actual"]],
-                                          "ensemble", timedelta(hours=hours), power, ensemble_on_adjusted=False, pool_stations=True, experts=EXPERT_SET, break_guard=guard)
+                                          "ensemble", timedelta(hours=hours), power, ensemble_on_adjusted=False, pool_stations=True, experts=(*EXPERT_SET, *extra), break_guard=guard)
             row[name] = score(values)
-            if guard and name == "guard 4h p6":
+            if name == "prod (guarda)":
                 row["break"] = info.get("regime_break")
         rows.append(row)
     table = pd.DataFrame(rows).set_index("cutoff")

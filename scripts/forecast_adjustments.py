@@ -55,6 +55,13 @@ BREAK_FLOOR = 0.25  # WAPE of the best period copy over the last hour
 BREAK_RATIO = 2.0   # ... and that many times its WAPE over the previous day
 LAG_EXPERTS = tuple(f"lag_{p}h" for p in PERIOD_HOURS)  # single-period copies (kept for backtests)
 PERIODIC_EXPERTS = tuple(f"per_{p}h" for p in PERIOD_HOURS)  # period averaged over PERIODIC_WINDOW
+# Damped-trend persistence: last value + damping x (last-hour slope) x horizon. After the 4h
+# oscillation ended (virtual 2026-09-20 12:15) each station drifts smoothly for hours; on 814
+# dense post-break forecasts damping 0.5 scored 78.0% vs 76.1% for plain persistence (full
+# slope: 74.2%). Not periodic, so the regime-break guard keeps it.
+TREND_DAMPING = {"trend": 0.5, "trend_03": 0.3, "trend_full": 1.0}  # only "trend" runs in production
+TREND_EXPERTS = ("trend",)
+TREND_SLOPE_WINDOW = timedelta(hours=1)
 
 
 def reference_lag_days(times: pd.Series) -> np.ndarray:
@@ -95,6 +102,13 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
     out["reference_level"] = _lookup(table, "level_now", out["station_id"], origin_ref)
     out["persistence"] = _lookup(table, "demand", out["station_id"], out["observed_at"])
     target = pd.to_datetime(out["target_at"], utc=True)
+    origin = pd.to_datetime(out["observed_at"], utc=True)
+    hour_ago = _lookup(table, "demand", out["station_id"], origin - TREND_SLOPE_WINDOW)
+    slope = (out["persistence"].to_numpy() - hour_ago) / (TREND_SLOPE_WINDOW / PERIOD)
+    steps = ((target - origin) / PERIOD).to_numpy(dtype=float)
+    for name, damping in TREND_DAMPING.items():
+        # no slope known (gap an hour ago) -> plain persistence
+        out[name] = np.clip(out["persistence"].to_numpy() + np.nan_to_num(damping * slope * steps), 0, None)
     for hours, lag_name, mean_name in zip(PERIOD_HOURS, LAG_EXPERTS, PERIODIC_EXPERTS):
         copies = [
             _lookup(table, "demand", out["station_id"], target - timedelta(hours=hours * k))
@@ -248,10 +262,11 @@ def production_adjust(
     if mode != "ensemble":
         raise ValueError(f"unknown adjustment mode {mode!r}")
     broke = False
-    if break_guard and any(e not in EXPERTS for e in experts):
+    periodic = (*LAG_EXPERTS, *PERIODIC_EXPERTS)
+    if break_guard and any(e in periodic for e in experts):
         broke, _ = periodic_break(data, frame["observed_at"].max())
         if broke:
-            experts = tuple(e for e in experts if e in EXPERTS)
+            experts = tuple(e for e in experts if e not in periodic)
             window = min(window, BREAK_RECENT)
     past = history.copy()
     past["target_at"] = pd.to_datetime(past["target_at"], utc=True)

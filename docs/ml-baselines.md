@@ -587,3 +587,24 @@ referencia, ese ciclo sólo compiten modelo, persistencia y día comparable, pes
 
 El ciclo 12:00 no se podía salvar (la ruptura empezó justo después de su corte). Activada en
 producción (`ENSEMBLE_BREAK_GUARD = True`).
+
+## Experto de tendencia amortiguada (2026-10-04)
+
+Tras la ruptura cada estación deriva suavemente durante horas (03000: 42→~1000; 07111: 2108→211
+y vuelve a subir) y ninguna copia periódica (1,5–8 h), ni el día o la semana anteriores, sirve.
+Nuevo experto `trend` = último valor + 0,5 × pendiente de la última hora × horizonte (≥ 0).
+En 814 pronósticos densos post-ruptura: persistencia 76,1 %, tendencia ×0,5 78,0 %, ×0,3 77,9 %,
+×1,0 74,2 %. Repetición del ensamble sobre 40 ciclos reales (`scripts/backtest_regime_switch.py`):
+
+| ciclo | producción (guarda) | + trend 0,5 | trend solo |
+|---|---|---|---|
+| 13:00 | 68,8 | 69,7 | 79,0 |
+| 14:00 | 81,4 | 81,1 | 80,3 |
+| 15:00 | 75,3 | 75,8 | 75,9 |
+| 16:00 | 78,9 | 81,0 | 81,8 |
+| 17:00 (24 reales) | 82,2 | 84,8 | 86,2 |
+| régimen 4h (31 ciclos) | 92,98 | 92,97 | — |
+
+Se añade al ensamble (+1,2 puntos de media en los 5 ciclos con la guarda activa, neutral en el
+régimen 4h). La tendencia sola fue aún mejor después de la ruptura (80,6 vs 78,5), pero son 5
+ciclos; se revisará con más datos antes de darle más peso.

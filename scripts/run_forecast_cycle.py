@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
-from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, production_adjust
+from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, TREND_EXPERTS, production_adjust
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
@@ -106,7 +106,9 @@ ENSEMBLE_ON_ADJUSTED = False
 # hour (forecast_adjustments.periodic_break). Replayed on 29 live cycles: never fired during the
 # 4h regime (93.05% either way), fired on the first cycle after it ended (68.8% vs 10.8% sent).
 ENSEMBLE_BREAK_GUARD = True
-ENSEMBLE_EXPERTS = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS)
+# Damped-trend persistence (forecast_adjustments.TREND_DAMPING): replayed on 40 live cycles it is
+# neutral in the 4h regime (92.97 vs 92.98) and adds ~1.2 points per post-break cycle.
+ENSEMBLE_EXPERTS = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS)
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
