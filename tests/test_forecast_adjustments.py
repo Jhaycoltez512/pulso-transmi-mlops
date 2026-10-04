@@ -224,3 +224,15 @@ def test_break_guard_drops_the_periodic_experts() -> None:
     assert info["regime_break"] == 1.0
     assert not any(k.startswith("lag_") for k in info)
     assert abs(values[0] - 1500.0) < 5.0  # persistence, the only expert right over the last hour
+
+
+def test_trend_expert_extends_the_last_hour_slope_damped() -> None:
+    from forecast_adjustments import reference_inputs
+
+    times = pd.date_range("2026-09-20T12:00Z", periods=5, freq="15min")  # 100, 110, ..., 140
+    data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": [100.0, 110.0, 120.0, 130.0, 140.0]})
+    cutoff = times[-1]
+    frame = pd.DataFrame({"station_id": "A", "observed_at": cutoff, "target_at": [cutoff + pd.Timedelta(minutes=15 * k) for k in (1, 4)]})
+    out = reference_inputs(data, frame)
+    assert np.allclose(out["trend"], [140 + 0.5 * 10 * 1, 140 + 0.5 * 10 * 4])
+    assert np.allclose(out["trend_full"], [150, 180])
