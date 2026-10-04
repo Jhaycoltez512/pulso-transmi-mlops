@@ -423,6 +423,24 @@ def target_horizons(cycle: dict) -> dict[tuple[str, str], int]:
     return lookup
 
 
+def fill_gaps(data: pd.DataFrame) -> pd.DataFrame:
+    """Put every station on the full 15-min grid, carrying its last known values forward.
+
+    Since 2026-10-04 the API leaves some station-periods out of the stream (11 of 12 stations at
+    the 15:00 cutoff); the model needs all 12 at the cutoff and gap-free lags, so the cycle failed.
+    """
+    times = pd.date_range(data["observed_at"].min(), data["observed_at"].max(), freq="15min")
+    stations = sorted(data["station_id"].unique())
+    grid = pd.MultiIndex.from_product([stations, times], names=["station_id", "observed_at"]).to_frame(index=False)
+    filled = grid.merge(data, on=["station_id", "observed_at"], how="left").sort_values(["station_id", "observed_at"])
+    missing = int(filled["demand"].isna().sum())
+    if missing:
+        value_columns = [c for c in filled.columns if c not in ("station_id", "observed_at")]
+        filled[value_columns] = filled.groupby("station_id")[value_columns].ffill()
+        print(f"Filled {missing} missing station-periods with each station's last known values.")
+    return filled.dropna(subset=["demand"]).reset_index(drop=True)
+
+
 def main() -> None:
     load_dotenv()
     url = os.environ.get("SUPABASE_URL")
@@ -456,7 +474,7 @@ def main() -> None:
             return
 
         upsert_cycle(loader, cycle)
-        data = add_origin_features(load_training_data())
+        data = add_origin_features(fill_gaps(load_training_data()))
         now = pd.Timestamp.now(tz="UTC")
 
         forecast_run = loader.insert("forecast_runs", {
