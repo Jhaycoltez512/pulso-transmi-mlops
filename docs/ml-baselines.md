@@ -565,3 +565,25 @@ La primera submission de práctica se aceptó para el ciclo
 `cyc_practice_20260918`: 12 predicciones, estado `accepted`, intento oficial
 `1`. El recibo permanece únicamente como artefacto local para no versionar datos
 de ejecución ni identificadores operativos.
+
+## Fin del régimen 4h y guarda de ruptura (2026-10-04)
+
+Desde 2026-09-20 12:15 (virtual), a la vez que el stream pasó a schema v2, la oscilación de 4 h
+dejó de repetirse: copiar cualquier periodo (2–6 h) pasó de ~7 % a >25 % de WAPE. El ensamble,
+con pesos de las últimas 4 h (casi todo régimen viejo), siguió enviando las copias periódicas:
+34,0 % y 10,8 % en los ciclos 12:00 y 13:00, cuando la persistencia daba 74,5 % y 68,9 %.
+Acortar la ventana no basta (1 h: 38,5 % de media en esos dos ciclos).
+
+`forecast_adjustments.periodic_break` mide en las observaciones el WAPE de la mejor copia
+periódica en la última hora y en las 24 h anteriores; si la reciente es > 0,25 y > 2× la de
+referencia, ese ciclo sólo compiten modelo, persistencia y día comparable, pesados sobre la
+última hora. Repetición sobre 29 ciclos reales (`scripts/backtest_regime_switch.py`):
+
+| variante | régimen 4h (27) | tras el corte (2) | todo (29) |
+|---|---|---|---|
+| producción 4h p6 | 93,05 | 22,39 | 88,18 |
+| guarda 4h p6 | 93,05 (nunca se activa) | 51,41 (13:00: 68,8) | 90,18 |
+| ventana 1h p6 | 92,72 | 38,51 | 88,98 |
+
+El ciclo 12:00 no se podía salvar (la ruptura empezó justo después de su corte). Activada en
+producción (`ENSEMBLE_BREAK_GUARD = True`).
