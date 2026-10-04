@@ -29,7 +29,8 @@ import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
 from forecast_adjustments import (
-    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, TREND_EXPERTS,
+    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, SMOOTH_EXPERTS,
+    TREND_EXPERTS,
     production_adjust,
 )
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
@@ -118,6 +119,9 @@ ENSEMBLE_BREAK_GUARD = True
 # usable, 92.80 vs 93.06 in the 4h regime.
 ENSEMBLE_EXPERTS = (
     *EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS, *LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS, *SHIFT_EXPERTS,
+    # Smoothed copies (forecast_adjustments.SMOOTH_EXPERTS), replayed on 60 live cycles: 91.61 vs
+    # 90.09 since the 8h experts went live, 92.99 vs 92.75 in the 4h regime.
+    *SMOOTH_EXPERTS,
 )
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config

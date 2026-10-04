@@ -627,3 +627,24 @@ y ventana de pesos de 2 h. Pronósticos densos (1015): persistencia 77,9; tenden
 | + 7–12 h + shift, ventana 4 h | 92,90 | 84,5 |
 | **+ 7–12 h + shift, ventana 2 h** | 92,80 | **87,4** (últimos 3: 91,0 / 90,5 / 88,3) |
 | copia 8 h sola | 90,98 | 88,5 |
+
+## Copias periódicas suavizadas (2026-10-04)
+
+Experto `sm_Ph` = media del valor P horas antes del objetivo y sus vecinos de ±15 min. La onda de
+8 h es suave y cada valor de 15 min trae ruido; el promedio de 3 puntos cancela parte sin mover la
+onda. En los 250 pronósticos reales desde que los expertos de 8 h entraron a producción: enviado
+90,43, copia 8 h 90,14, **copia 8 h suavizada 91,93** (mejor que la copia simple en 11 de 12
+ciclos del régimen 8 h). La copia de 8 h sola no supera al ensamble (90,14 vs 90,43); las copias
+ajustadas al nivel tampoco (88,95–89,90).
+
+Repetición sobre 60 ciclos reales (`scripts/backtest_regime_switch.py`):
+
+| variante | régimen 4h (31) | régimen 8h (12) | desde 09-21 03:00 (6) | todo (60) |
+|---|---|---|---|---|
+| producción (PR #17) | 92,75 | 88,78 | 90,09 | 88,84 |
+| **+ copias suavizadas, ventana 2 h** | **92,99** | **89,78** | **91,61** | **89,30** |
+| + copias suavizadas, ventana 4 h | 93,12 | 88,41 | 91,67 | 89,09 |
+| `sm_8h` solo | 92,27 | 90,82 | 91,92 | 80,12 |
+
+Se activa con ventana de 2 h: mejora en ambos regímenes y la de 4 h se adapta más lento tras un
+cambio.
