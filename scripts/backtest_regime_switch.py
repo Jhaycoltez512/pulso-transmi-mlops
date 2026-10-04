@@ -24,10 +24,8 @@ from train_baseline import load_training_data
 REGIME_START = pd.Timestamp("2026-09-18T05:00:00Z")
 BREAK = pd.Timestamp("2026-09-20T12:00:00Z")
 EXPERT_SET = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS)
-VARIANTS = {
-    "prod 4h p6": (4, 6.0), "3h p6": (3, 6.0), "2h p6": (2, 6.0), "1h p6": (1, 6.0),
-    "2h p3": (2, 3.0), "1h p3": (1, 3.0), "1h p10": (1, 10.0), "2h p10": (2, 10.0),
-}
+VARIANTS = {"prod 4h p6": (4, 6.0), "2h p6": (2, 6.0), "1h p6": (1, 6.0), "1h p3": (1, 3.0)}
+CYCLES = 30
 
 
 def main() -> None:
@@ -48,9 +46,11 @@ def main() -> None:
     sent = sent.groupby(["cutoff", "target_at", "station_id", "horizon_minutes"], as_index=False)[["predicted_demand", "raw"]].last()
 
     rows = []
-    for cutoff, cycle in sent.groupby("cutoff"):
-        if cutoff < REGIME_START or cycle["target_at"].max() > last_obs:
+    cutoffs = sorted(c for c in sent["cutoff"].unique() if c >= REGIME_START)[-CYCLES:]
+    for cutoff, cycle in sent.loc[sent["cutoff"].isin(cutoffs)].groupby("cutoff"):
+        if cycle["target_at"].max() > last_obs:
             continue
+        recent = data.loc[(data["observed_at"] > cutoff - timedelta(days=15)) & (data["observed_at"] <= cutoff)]
         frame = cycle.rename(columns={"raw": "model"})[["station_id", "horizon_minutes", "target_at", "model"]].assign(observed_at=cutoff).reset_index(drop=True)
         truth = np.array([actual.get((s, t), np.nan) for s, t in zip(frame["station_id"], frame["target_at"])], dtype=float)
         if np.isnan(truth).any():
@@ -61,7 +61,7 @@ def main() -> None:
         past_all = sent.loc[(sent["target_at"] <= cutoff) & (sent["target_at"] > cutoff - timedelta(hours=6))].rename(columns={"raw": "model"})
         past_all = past_all.assign(actual=[actual.get((s, t), np.nan) for s, t in zip(past_all["station_id"], past_all["target_at"])]).dropna(subset=["actual"])
         for name, (hours, power) in VARIANTS.items():
-            values, _ = production_adjust(data, frame, past_all[["station_id", "horizon_minutes", "target_at", "model", "actual"]],
+            values, _ = production_adjust(recent, frame, past_all[["station_id", "horizon_minutes", "target_at", "model", "actual"]],
                                           "ensemble", timedelta(hours=hours), power, ensemble_on_adjusted=False, pool_stations=True, experts=EXPERT_SET)
             row[name] = score(values)
         rows.append(row)
