@@ -190,3 +190,37 @@ def test_ensemble_follows_a_periodic_regime() -> None:
     # the 4h-period average is exact (so is the comparable day: 24h is 6 periods); the model isn't
     assert weights["per_4h"] > 0.4 and weights["model"] < 0.01
     assert abs(values[0] - actual[target]) < 0.05 * actual[target]
+
+
+def test_periodic_break_fires_only_when_the_period_stops_repeating() -> None:
+    from forecast_adjustments import periodic_break
+
+    times = pd.date_range("2026-09-18T00:00Z", "2026-09-20T12:00Z", freq="15min")
+    phase = (times - times[0]) / pd.Timedelta(hours=4) * 2 * np.pi
+    periodic = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": 500 + 400 * np.sin(phase)})
+    broke, info = periodic_break(periodic, times[-1])
+    assert not broke and info["recent_wape"] < 0.01
+
+    after = pd.date_range(times[-1] + pd.Timedelta(minutes=15), periods=4, freq="15min")
+    flat = pd.DataFrame({"station_id": "A", "observed_at": after, "demand": [100.0, 1500.0, 100.0, 1500.0]})
+    broke, info = periodic_break(pd.concat([periodic, flat]), after[-1])
+    assert broke and info["recent_wape"] > 0.25
+
+
+def test_break_guard_drops_the_periodic_experts() -> None:
+    from forecast_adjustments import EXPERTS, LAG_EXPERTS, production_adjust
+
+    times = pd.date_range("2026-09-10T00:00Z", "2026-09-20T13:00Z", freq="15min")
+    phase = (times - times[0]) / pd.Timedelta(hours=4) * 2 * np.pi
+    demand = np.asarray(500 + 400 * np.sin(phase), dtype=float)
+    demand[times > pd.Timestamp("2026-09-20T12:00Z")] = 1500.0  # pattern stops at a new level
+    data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": demand})
+    cutoff = times[-1]
+    frame = pd.DataFrame({"station_id": "A", "observed_at": cutoff, "target_at": [cutoff + pd.Timedelta(minutes=15)], "horizon_minutes": [15], "model": [0.0]})
+    hist_t = [cutoff - pd.Timedelta(minutes=15 * k) for k in range(4)]
+    history = pd.DataFrame({"station_id": "A", "horizon_minutes": 15, "target_at": hist_t, "model": 0.0, "actual": 1500.0})
+    values, info = production_adjust(data, frame, history, "ensemble", pd.Timedelta(hours=4), 6.0, ensemble_on_adjusted=False,
+                                     pool_stations=True, experts=(*EXPERTS, *LAG_EXPERTS), break_guard=True)
+    assert info["regime_break"] == 1.0
+    assert not any(k.startswith("lag_") for k in info)
+    assert abs(values[0] - 1500.0) < 5.0  # persistence, the only expert right over the last hour

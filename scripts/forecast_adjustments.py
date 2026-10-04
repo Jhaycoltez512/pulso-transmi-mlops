@@ -44,6 +44,15 @@ CAP_THRESHOLD = 1.5  # current level / comparable-day level above which the grow
 EXPERTS = ("model", "persistence", "comparable")
 PERIOD_HOURS = (2, 3, 4, 5, 6)
 PERIODIC_WINDOW = timedelta(hours=24)  # how far back each periodic expert averages its period
+# Regime-break guard. At virtual 2026-09-20 12:15 the 4h oscillation stopped; weights learnt over
+# the last 4h kept the periodic experts on top and the next two cycles scored 34% and 11% while
+# persistence scored 75% and 69%. Copying any period P is checked directly on the observations:
+# when even the best copy is badly wrong over the last hour (and far worse than over the day
+# before), the periodic experts are dropped and the rest are weighted on that last hour only.
+BREAK_RECENT = timedelta(hours=1)
+BREAK_BASELINE = timedelta(hours=24)
+BREAK_FLOOR = 0.25  # WAPE of the best period copy over the last hour
+BREAK_RATIO = 2.0   # ... and that many times its WAPE over the previous day
 LAG_EXPERTS = tuple(f"lag_{p}h" for p in PERIOD_HOURS)  # single-period copies (kept for backtests)
 PERIODIC_EXPERTS = tuple(f"per_{p}h" for p in PERIOD_HOURS)  # period averaged over PERIODIC_WINDOW
 
@@ -190,10 +199,32 @@ def expert_frame(frame: pd.DataFrame, model: np.ndarray, experts: tuple[str, ...
     return pd.DataFrame(columns)[list(experts)]
 
 
+def periodic_break(data: pd.DataFrame, cutoff: pd.Timestamp) -> tuple[bool, dict[str, float]]:
+    """Whether the periodic pattern broke in the last hour, from the observations up to cutoff."""
+    table = data.assign(observed_at=_utc_ns(data["observed_at"]).array)
+    y = table.pivot_table(index="observed_at", columns="station_id", values="demand", aggfunc="last").sort_index()
+    end = pd.Timestamp(cutoff).tz_convert("UTC") if pd.Timestamp(cutoff).tzinfo else pd.Timestamp(cutoff).tz_localize("UTC")
+    y = y.loc[(y.index > end - BREAK_BASELINE - BREAK_RECENT - timedelta(hours=max(PERIOD_HOURS))) & (y.index <= end)]
+
+    def wape(hours: int, start: pd.Timestamp, stop: pd.Timestamp) -> float:
+        now = y.loc[(y.index > start) & (y.index <= stop)]
+        then = y.reindex(now.index - timedelta(hours=hours))
+        then.index = now.index
+        mask = now.notna() & then.notna()
+        total = now.where(mask).sum().sum()
+        return float((now - then).abs().where(mask).sum().sum() / total) if total > 0 else float("nan")
+
+    recent = min((wape(h, end - BREAK_RECENT, end) for h in PERIOD_HOURS), default=float("nan"))
+    baseline = min((wape(h, end - BREAK_RECENT - BREAK_BASELINE, end - BREAK_RECENT) for h in PERIOD_HOURS), default=float("nan"))
+    broke = bool(np.isfinite(recent) and np.isfinite(baseline) and recent > BREAK_FLOOR and recent > BREAK_RATIO * baseline)
+    return broke, {"recent_wape": round(recent, 4), "baseline_wape": round(baseline, 4)}
+
+
 def production_adjust(
     data: pd.DataFrame, predictions: pd.DataFrame, history: pd.DataFrame, mode: str,
     window: timedelta, power: float, ensemble_on_adjusted: bool = True,
     threshold: float = CAP_THRESHOLD, pool_stations: bool = False, experts: tuple[str, ...] = EXPERTS,
+    break_guard: bool = False,
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Final values for one cycle.
 
@@ -203,6 +234,8 @@ def production_adjust(
     mean expert weights ({} when not ensembling). pool_stations: one set of weights per horizon
     across stations (more history per weight) instead of one per station and horizon. experts:
     which predictors compete ("model" must be one of them; see EXPERTS and PERIODIC_EXPERTS).
+    break_guard: when periodic_break fires, only the non-periodic experts compete, weighted over
+    BREAK_RECENT (the "regime_break" key of the returned dict says whether it fired).
     """
     frame = reference_inputs(data, predictions)
     model = frame["model"].to_numpy(dtype=float)
@@ -214,6 +247,12 @@ def production_adjust(
         return adjusted, {}
     if mode != "ensemble":
         raise ValueError(f"unknown adjustment mode {mode!r}")
+    broke = False
+    if break_guard and any(e not in EXPERTS for e in experts):
+        broke, _ = periodic_break(data, frame["observed_at"].max())
+        if broke:
+            experts = tuple(e for e in experts if e in EXPERTS)
+            window = min(window, BREAK_RECENT)
     past = history.copy()
     past["target_at"] = pd.to_datetime(past["target_at"], utc=True)
     past["observed_at"] = past["target_at"] - pd.to_timedelta(past["horizon_minutes"], unit="m")
@@ -225,4 +264,7 @@ def production_adjust(
     hist["actual"] = past["actual"].to_numpy(dtype=float)
     weights = expert_weights(hist, frame[[*keys, "observed_at"]].reset_index(drop=True), keys, window, power, experts)
     experts_now = expert_frame(frame, adjusted if ensemble_on_adjusted else model, experts)
-    return np.clip(combine(experts_now, weights), 0, None), weights.mean().round(3).to_dict()
+    summary = weights.mean().round(3).to_dict()
+    if break_guard:
+        summary["regime_break"] = float(broke)
+    return np.clip(combine(experts_now, weights), 0, None), summary

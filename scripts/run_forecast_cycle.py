@@ -102,6 +102,10 @@ ENSEMBLE_ON_ADJUSTED = False
 # regime has run for a day the averages cancel the copies' noise (+1.5 points per cycle on the
 # live regime, 91.3% -> 92.8%), while at a regime's onset the averages still mix pre-regime
 # periods and the copies lead (backtest_periodic.py replay, docs/ml-baselines.md).
+# Drop the periodic experts for a cycle when copying any period has stopped working over the last
+# hour (forecast_adjustments.periodic_break). Replayed on 29 live cycles: never fired during the
+# 4h regime (93.05% either way), fired on the first cycle after it ended (68.8% vs 10.8% sent).
+ENSEMBLE_BREAK_GUARD = True
 ENSEMBLE_EXPERTS = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS)
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
@@ -520,7 +524,7 @@ def main() -> None:
             values, mean_weights = production_adjust(
                 data, frame, history_frame, adjustment, ENSEMBLE_WINDOW, ENSEMBLE_POWER,
                 ensemble_on_adjusted=ENSEMBLE_ON_ADJUSTED, threshold=ADJUST_CAP_THRESHOLD, pool_stations=ENSEMBLE_POOL_STATIONS,
-                experts=ENSEMBLE_EXPERTS,
+                experts=ENSEMBLE_EXPERTS, break_guard=ENSEMBLE_BREAK_GUARD,
             )
             for p, value in zip(predictions, values, strict=True):
                 p["value"] = float(value)
