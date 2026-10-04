@@ -251,3 +251,15 @@ def test_decide_action_names_the_station_on_station_drift() -> None:
     action, reason = decide_action({"trained_at": now.isoformat()}, {}, {}, drift_rows, now)
     assert action == "retrain"
     assert reason == "data_drift: station_level:05100 x0.41 vs training > x1.50"
+
+
+def test_fill_gaps_carries_the_last_value_for_a_missing_station_period() -> None:
+    from run_forecast_cycle import fill_gaps
+
+    t = pd.date_range("2026-09-20T14:30Z", periods=3, freq="15min")
+    data = pd.DataFrame({"station_id": ["A", "A", "A", "B", "B"], "observed_at": [*t, t[0], t[1]],
+                         "demand": [1.0, 2.0, 3.0, 10.0, 20.0], "rain_forecast": [0.1] * 5})
+    out = fill_gaps(data)
+    assert len(out) == 6
+    row = out.loc[(out["station_id"] == "B") & (out["observed_at"] == t[2])].iloc[0]
+    assert row["demand"] == 20.0 and row["rain_forecast"] == 0.1
