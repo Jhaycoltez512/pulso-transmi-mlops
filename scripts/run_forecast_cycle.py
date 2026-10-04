@@ -28,7 +28,10 @@ import numpy as np
 import pandas as pd
 
 from generate_weekly_submission_preview import PULSO_API_URL, active_cycle, validate
-from forecast_adjustments import EXPERTS, LAG_EXPERTS, PERIODIC_EXPERTS, TREND_EXPERTS, production_adjust
+from forecast_adjustments import (
+    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, TREND_EXPERTS,
+    production_adjust,
+)
 from load_supabase import SupabaseLoader, delete_objects, download_object, list_objects, load_dotenv, upload_object
 from train_baseline import load_training_data, station_metrics
 from train_catboost_direct import (
@@ -94,7 +97,9 @@ STATION_DRIFT_PREFIX = "station_level:"
 # The first version (model / persistence / comparable day only, 6h, p3) lost to the model live
 # and was reverted. "blend_cap" and "none" stay available through PULSO_ADJUSTMENT.
 DEFAULT_ADJUSTMENT = "ensemble"
-ENSEMBLE_WINDOW = timedelta(hours=4)
+# 2h since 2026-10-04: after a regime change the weights catch up an hour or two sooner (87.4% vs
+# 84.5% on the first 8h-regime cycles) for 0.26 points in a steady regime (92.80 vs 93.06).
+ENSEMBLE_WINDOW = timedelta(hours=2)
 ENSEMBLE_POWER = 6.0
 ENSEMBLE_POOL_STATIONS = True
 ENSEMBLE_ON_ADJUSTED = False
@@ -108,7 +113,12 @@ ENSEMBLE_ON_ADJUSTED = False
 ENSEMBLE_BREAK_GUARD = True
 # Damped-trend persistence (forecast_adjustments.TREND_DAMPING): replayed on 40 live cycles it is
 # neutral in the 4h regime (92.97 vs 92.98) and adds ~1.2 points per post-break cycle.
-ENSEMBLE_EXPERTS = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS)
+# 7-12h periods and level-shifted copies: the regime after the 4h one repeats every 8h. Replayed on
+# 44 live cycles with a 2h weight window: 87.4% vs 78.4% on the 6 cycles where the 8h copy is
+# usable, 92.80 vs 93.06 in the 4h regime.
+ENSEMBLE_EXPERTS = (
+    *EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS, *LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS, *SHIFT_EXPERTS,
+)
 ADJUST_CAP_THRESHOLD = 2.5
 # Winner of the walk-forward sweep (global scope, 4h window, half correction): same config
 # was best at every horizon, ~-0.0012 WAPE, never worse than production in any fold.
