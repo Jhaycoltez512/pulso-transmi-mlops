@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from forecast_adjustments import (
-    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, TREND_EXPERTS,
+    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, SMOOTH_EXPERTS, TREND_EXPERTS,
     production_adjust, reference_inputs,
 )
 from run_forecast_cycle import fill_gaps
@@ -27,15 +27,15 @@ from train_baseline import load_training_data
 
 REGIME_START = pd.Timestamp("2026-09-18T05:00:00Z")
 BREAK = pd.Timestamp("2026-09-20T12:00:00Z")
-EXPERT_SET = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS)  # production before the 8h periods
+BASE = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS, *LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS)
+EXPERT_SET = (*BASE, *SHIFT_EXPERTS)  # production since PR #17
 # name: (window hours, power, break guard, extra experts)
 VARIANTS = {
-    "prod": (4, 6.0, True, ()),
-    "+7-12h": (4, 6.0, True, (*LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS)),
-    "+7-12h+shift": (4, 6.0, True, (*LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS, *SHIFT_EXPERTS)),
-    "+7-12h+shift 2h": (2, 6.0, True, (*LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS, *SHIFT_EXPERTS)),
+    "prod": (2, 6.0, True, ()),
+    "+sm": (2, 6.0, True, SMOOTH_EXPERTS),
+    "+sm 4h": (4, 6.0, True, SMOOTH_EXPERTS),
 }
-CYCLES = 44
+CYCLES = 60
 
 
 def main() -> None:
@@ -69,14 +69,14 @@ def main() -> None:
         ref = reference_inputs(recent, frame)
         row = {"cutoff": cutoff, "reales": int(known.sum()), "enviado": score(cycle["predicted_demand"]), "modelo": score(frame["model"]),
                "persistencia": score(ref["persistence"]), "trend": score(ref["trend"]),
-               "lag_8h": score(ref["lag_8h"]), "shift_8h": score(ref["shift_8h"])}
+               "lag_8h": score(ref["lag_8h"]), "sm_8h": score(ref["sm_8h"])}
         past_all = sent.loc[(sent["target_at"] <= cutoff) & (sent["target_at"] > cutoff - timedelta(hours=6))].rename(columns={"raw": "model"})
         past_all = past_all.assign(actual=[actual.get((s, t), np.nan) for s, t in zip(past_all["station_id"], past_all["target_at"])]).dropna(subset=["actual"])
         for name, (hours, power, guard, extra) in VARIANTS.items():
             values, info = production_adjust(recent, frame, past_all[["station_id", "horizon_minutes", "target_at", "model", "actual"]],
                                           "ensemble", timedelta(hours=hours), power, ensemble_on_adjusted=False, pool_stations=True, experts=(*EXPERT_SET, *extra), break_guard=guard)
             row[name] = score(values)
-            if name in ("prod", "+7-12h+shift"):
+            if name in ("prod", "+sm"):
                 row[f"break {name}"] = info.get("regime_break")
         rows.append(row)
     table = pd.DataFrame(rows).set_index("cutoff")
@@ -85,7 +85,10 @@ def main() -> None:
     print(table.round(1).to_string())
     for label, part in (("regimen 4h (desde 24h)", table.loc[(table.index >= REGIME_START + timedelta(hours=24)) & (table.index < BREAK)]),
                         ("ultimas 24 antes del corte", table.loc[table.index < BREAK].tail(24)),
-                        ("tras el corte", table.loc[table.index >= BREAK]), ("todo", table)):
+                        ("tras el corte", table.loc[table.index >= BREAK]),
+                        ("regimen 8h con copia (desde 09-20 21:00)", table.loc[table.index >= pd.Timestamp("2026-09-20T21:00:00Z")]),
+                        ("con expertos de 8h en produccion (desde 09-21 03:00)", table.loc[table.index >= pd.Timestamp("2026-09-21T03:00:00Z")]),
+                        ("todo", table)):
         print(f"\nmedia {label} ({len(part)} ciclos):")
         print(part.mean().round(2).to_string())
 
