@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 
 from forecast_adjustments import (
-    EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS, SMOOTH_EXPERTS, TREND_EXPERTS,
+    EXPERTS, HARMONIC_EXPERTS, LAG_EXPERTS, LONG_LAG_EXPERTS, LONG_PERIODIC_EXPERTS, PERIODIC_EXPERTS, SHIFT_EXPERTS,
+    SMOOTH_EXPERTS, TREND_EXPERTS,
     production_adjust, reference_inputs,
 )
 from run_forecast_cycle import fill_gaps
@@ -28,12 +29,16 @@ from train_baseline import load_training_data
 REGIME_START = pd.Timestamp("2026-09-18T05:00:00Z")
 BREAK = pd.Timestamp("2026-09-20T12:00:00Z")
 BASE = (*EXPERTS, *LAG_EXPERTS, *PERIODIC_EXPERTS, *TREND_EXPERTS, *LONG_LAG_EXPERTS, *LONG_PERIODIC_EXPERTS)
-EXPERT_SET = (*BASE, *SHIFT_EXPERTS)  # production since PR #17
+EXPERT_SET = (*BASE, *SHIFT_EXPERTS, *SMOOTH_EXPERTS)  # production since PR #18
+LEAN = (*EXPERTS, *TREND_EXPERTS, *SMOOTH_EXPERTS, *HARMONIC_EXPERTS)
 # name: (window hours, power, break guard, extra experts)
-VARIANTS = {
-    "prod": (2, 6.0, True, ()),
-    "+sm": (2, 6.0, True, SMOOTH_EXPERTS),
-    "+sm 4h": (4, 6.0, True, SMOOTH_EXPERTS),
+VARIANTS = {  # name: (window h, power, guard, extra experts, replace the expert set)
+    "prod": (2, 6.0, True, (), None),
+    "+harm 2h p6": (2, 6.0, True, HARMONIC_EXPERTS, None),
+    "+harm 4h p6": (4, 6.0, True, HARMONIC_EXPERTS, None),
+    "+harm 4h p12": (4, 12.0, True, HARMONIC_EXPERTS, None),
+    "lean 2h p6": (2, 6.0, True, (), LEAN),
+    "lean 4h p12": (4, 12.0, True, (), LEAN),
 }
 CYCLES = 60
 
@@ -69,14 +74,14 @@ def main() -> None:
         ref = reference_inputs(recent, frame)
         row = {"cutoff": cutoff, "reales": int(known.sum()), "enviado": score(cycle["predicted_demand"]), "modelo": score(frame["model"]),
                "persistencia": score(ref["persistence"]), "trend": score(ref["trend"]),
-               "lag_8h": score(ref["lag_8h"]), "sm_8h": score(ref["sm_8h"])}
+               "sm_8h": score(ref["sm_8h"]), "harm_8h": score(ref["harm_8h"]), "harm_4h": score(ref["harm_4h"])}
         past_all = sent.loc[(sent["target_at"] <= cutoff) & (sent["target_at"] > cutoff - timedelta(hours=6))].rename(columns={"raw": "model"})
         past_all = past_all.assign(actual=[actual.get((s, t), np.nan) for s, t in zip(past_all["station_id"], past_all["target_at"])]).dropna(subset=["actual"])
-        for name, (hours, power, guard, extra) in VARIANTS.items():
+        for name, (hours, power, guard, extra, replace) in VARIANTS.items():
             values, info = production_adjust(recent, frame, past_all[["station_id", "horizon_minutes", "target_at", "model", "actual"]],
-                                          "ensemble", timedelta(hours=hours), power, ensemble_on_adjusted=False, pool_stations=True, experts=(*EXPERT_SET, *extra), break_guard=guard)
+                                          "ensemble", timedelta(hours=hours), power, ensemble_on_adjusted=False, pool_stations=True, experts=replace or (*EXPERT_SET, *extra), break_guard=guard)
             row[name] = score(values)
-            if name in ("prod", "+sm"):
+            if name in ("prod",):
                 row[f"break {name}"] = info.get("regime_break")
         rows.append(row)
     table = pd.DataFrame(rows).set_index("cutoff")

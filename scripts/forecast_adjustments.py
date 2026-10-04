@@ -74,6 +74,56 @@ SHIFT_EXPERTS = tuple(f"shift_{p}h" for p in ALL_PERIOD_HOURS)
 # moving the wave: 91.93% vs 90.14% for the plain 8h copy (and 90.43% submitted) on the first 250
 # live 8h-regime forecasts; ahead of the plain copy on 11 of 12 cycles.
 SMOOTH_EXPERTS = tuple(f"sm_{p}h" for p in ALL_PERIOD_HOURS)
+# Harmonic fit: per station, least squares on the last max(P, HARMONIC_MIN_WINDOW) of data with a
+# period-P Fourier basis of order HARMONIC_ORDER, extrapolated to the target. It smooths the noise
+# over a whole period instead of 3 points: on the live 8h-regime cycles 92.5% for P=8h vs 91.9%
+# for the smoothed copy and 89.9% submitted; on the 4h regime (P=4h, 8h window) 93.2% vs 91.9%.
+HARMONIC_ORDER = 2
+HARMONIC_MIN_WINDOW = timedelta(hours=8)
+HARMONIC_EXPERTS = tuple(f"harm_{p}h" for p in ALL_PERIOD_HOURS)
+
+
+def harmonic_fits(data: pd.DataFrame, frame: pd.DataFrame, hours_list=ALL_PERIOD_HOURS) -> dict[str, np.ndarray]:
+    """{harm_Ph: prediction per frame row} from a Fourier fit at each row's origin."""
+    table = data[["station_id", "observed_at", "demand"]].assign(observed_at=_utc_ns(data["observed_at"]).array)
+    y = table.pivot_table(index="observed_at", columns="station_id", values="demand", aggfunc="last").sort_index()
+    if y.empty:
+        return {f"harm_{h}h": np.full(len(frame), np.nan) for h in hours_list}
+    y = y.reindex(pd.date_range(y.index.min(), y.index.max(), freq=PERIOD)).ffill()
+    step0 = y.index[0]
+    origins = _utc_ns(frame["observed_at"]).array
+    targets = _utc_ns(frame["target_at"]).array
+    stations = np.asarray(frame["station_id"])
+    col = {s: i for i, s in enumerate(y.columns)}
+    values = y.to_numpy(float)
+    out = {f"harm_{h}h": np.full(len(frame), np.nan) for h in hours_list}
+    for origin in pd.unique(origins):
+        rows = np.flatnonzero(origins == origin)
+        end = int((origin - step0) / PERIOD)
+        if end < 0 or end >= len(values):
+            continue
+        for hours in hours_list:
+            period = hours * 4
+            window = max(period, int(HARMONIC_MIN_WINDOW / PERIOD))
+            if end - window + 1 < 0:
+                continue
+            seg = values[end - window + 1:end + 1]
+            ok = np.isfinite(seg).all(axis=0)
+            if not ok.any():
+                continue
+            def basis(x):
+                cols = [np.ones_like(x, dtype=float)]
+                for j in range(1, HARMONIC_ORDER + 1):
+                    cols += [np.cos(2 * np.pi * j * x / period), np.sin(2 * np.pi * j * x / period)]
+                return np.column_stack(cols)
+            beta = np.full((2 * HARMONIC_ORDER + 1, seg.shape[1]), np.nan)
+            beta[:, ok], *_ = np.linalg.lstsq(basis(np.arange(end - window + 1, end + 1)), seg[:, ok], rcond=None)
+            steps = ((targets[rows] - step0) / PERIOD).astype(float)
+            idx = np.array([col.get(st, -1) for st in stations[rows]])
+            pred = np.einsum("rk,kr->r", basis(steps), beta[:, np.clip(idx, 0, None)])
+            pred[idx < 0] = np.nan
+            out[f"harm_{hours}h"][rows] = np.clip(pred, 0, None)
+    return out
 # Damped-trend persistence: last value + damping x (last-hour slope) x horizon. After the 4h
 # oscillation ended (virtual 2026-09-20 12:15) each station drifts smoothly for hours; on 814
 # dense post-break forecasts damping 0.5 scored 78.0% vs 76.1% for plain persistence (full
@@ -144,6 +194,8 @@ def reference_inputs(data: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
             out[f"sm_{hours}h"] = np.nanmean(np.vstack([copies[0], *neighbours]), axis=0)
         then = _lookup(table, "demand", out["station_id"], origin - timedelta(hours=hours))
         out[f"shift_{hours}h"] = np.clip(copies[0] + SHIFT_WEIGHT * (out["persistence"].to_numpy() - then), 0, None)
+    for name, values in harmonic_fits(data, out).items():
+        out[name] = values
     return out
 
 
@@ -290,7 +342,7 @@ def production_adjust(
     if mode != "ensemble":
         raise ValueError(f"unknown adjustment mode {mode!r}")
     broke = False
-    periodic = tuple(e for e in experts if re.fullmatch(r"(lag|per|shift|sm)_\d+h", e))
+    periodic = tuple(e for e in experts if re.fullmatch(r"(lag|per|shift|sm|harm)_\d+h", e))
     if break_guard and periodic:
         hours = tuple(sorted({int(re.search(r"\d+", e).group()) for e in periodic}))
         broke, _ = periodic_break(data, frame["observed_at"].max(), hours)

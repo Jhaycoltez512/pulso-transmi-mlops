@@ -272,3 +272,19 @@ def test_smoothed_copy_averages_the_period_value_with_its_neighbours() -> None:
     out = reference_inputs(data, frame)
     assert out["lag_8h"].iloc[0] == 80.0
     assert out["sm_8h"].iloc[0] == (70.0 + 80.0 + 90.0) / 3
+
+
+def test_harmonic_expert_recovers_a_clean_periodic_wave() -> None:
+    from forecast_adjustments import reference_inputs
+
+    times = pd.date_range("2026-09-20T00:00Z", periods=96, freq="15min")
+    phase = 2 * np.pi * np.arange(96) / 32  # 8h period
+    rng = np.random.default_rng(0)
+    data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": 500 + 300 * np.sin(phase) + rng.normal(0, 20, 96)})
+    cutoff = times[-1]
+    targets = [cutoff + pd.Timedelta(minutes=15 * k) for k in (1, 2, 3, 4)]
+    frame = pd.DataFrame({"station_id": "A", "observed_at": cutoff, "target_at": targets})
+    out = reference_inputs(data, frame)
+    truth = 500 + 300 * np.sin(2 * np.pi * np.arange(96, 100) / 32)
+    assert np.abs(out["harm_8h"].to_numpy() - truth).max() < 25  # noise sd 20, fit averages it out
+    assert np.abs(out["lag_8h"].to_numpy() - truth).mean() > np.abs(out["harm_8h"].to_numpy() - truth).mean()
