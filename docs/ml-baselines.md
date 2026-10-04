@@ -608,3 +608,22 @@ En 814 pronósticos densos post-ruptura: persistencia 76,1 %, tendencia ×0,5 78
 Se añade al ensamble (+1,2 puntos de media en los 5 ciclos con la guarda activa, neutral en el
 régimen 4h). La tendencia sola fue aún mejor después de la ruptura (80,6 vs 78,5), pero son 5
 ciclos; se revisará con más datos antes de darle más peso.
+
+## Régimen de 8 h: periodos largos y copia ajustada (2026-10-04)
+
+Con ~14 h del régimen nuevo, el error de copiar el valor P horas antes muestra un periodo exacto de
+**8 h** (copiar 7/8/9 h: 63,2 / 79,0 / 60,2 %; 4–6 h: 23–42 %). Nuestros expertos periódicos sólo
+cubrían 2–6 h y la guarda de ruptura tampoco lo veía. Los rivales que lo detectaron hacían 81–88 %
+por ciclo mientras nosotros 73–82 %.
+
+Cambios: periodos 7, 8, 9, 10 y 12 h (`lag_*`, `per_*`), un experto `shift_Ph` = copia de hace P
++ 0,5 × (ahora − valor P antes de ahora), la guarda evalúa los periodos que el ensamble puede copiar,
+y ventana de pesos de 2 h. Pronósticos densos (1015): persistencia 77,9; tendencia 79,6; copia 8 h
+85,4; copia 8 h ajustada 86,7. Repetición sobre 44 ciclos reales:
+
+| variante | régimen 4h (29) | ciclos con copia de 8 h (21:00–02:00, 6) |
+|---|---|---|
+| producción anterior | 93,06 | 78,4 |
+| + 7–12 h + shift, ventana 4 h | 92,90 | 84,5 |
+| **+ 7–12 h + shift, ventana 2 h** | 92,80 | **87,4** (últimos 3: 91,0 / 90,5 / 88,3) |
+| copia 8 h sola | 90,98 | 88,5 |

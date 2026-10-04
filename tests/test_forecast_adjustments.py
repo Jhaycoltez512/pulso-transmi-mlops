@@ -236,3 +236,27 @@ def test_trend_expert_extends_the_last_hour_slope_damped() -> None:
     out = reference_inputs(data, frame)
     assert np.allclose(out["trend"], [140 + 0.5 * 10 * 1, 140 + 0.5 * 10 * 4])
     assert np.allclose(out["trend_full"], [150, 180])
+
+
+def test_shift_expert_moves_the_period_copy_half_way_to_the_current_level() -> None:
+    from forecast_adjustments import reference_inputs
+
+    times = pd.date_range("2026-09-20T00:00Z", periods=40, freq="15min")
+    demand = np.full(len(times), 100.0)
+    data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": demand})
+    cutoff = times[-1]  # 09:45
+    data.loc[data["observed_at"] == cutoff, "demand"] = 300.0  # now 300; 8h before now: 100
+    frame = pd.DataFrame({"station_id": "A", "observed_at": cutoff, "target_at": [cutoff + pd.Timedelta(minutes=15)]})
+    out = reference_inputs(data, frame)
+    assert out["lag_8h"].iloc[0] == 100.0
+    assert out["shift_8h"].iloc[0] == 100.0 + 0.5 * (300.0 - 100.0)
+
+
+def test_break_guard_uses_the_periods_the_ensemble_can_copy() -> None:
+    from forecast_adjustments import periodic_break
+
+    times = pd.date_range("2026-09-18T00:00Z", "2026-09-20T12:00Z", freq="15min")
+    phase = (times - times[0]) / pd.Timedelta(hours=8) * 2 * np.pi
+    data = pd.DataFrame({"station_id": "A", "observed_at": times, "demand": 500 + 400 * np.sin(phase)})
+    assert periodic_break(data, times[-1], hours=(2, 3, 4, 5, 6, 8))[0] is False
+    assert periodic_break(data, times[-1], hours=(8,))[1]["recent_wape"] < 0.01
