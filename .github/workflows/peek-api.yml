@@ -1,0 +1,26 @@
+# Temporary and read-only: API clock and current cycle. Remove once read.
+name: peek-api
+
+on:
+  push:
+    branches: [claude/intelligent-bell-np1lix]
+    paths: [.github/workflows/peek-api.yml, scripts/peek_api.py]
+
+permissions:
+  contents: read
+
+jobs:
+  peek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install httpx
+      - name: Read API (read-only)
+        env:
+          PULSO_API_URL: https://pulso-transmi.72-60-245-2.sslip.io
+          PULSO_API_KEY: ${{ secrets.PULSO_API_KEY }}
+        run: python scripts/peek_api.py
